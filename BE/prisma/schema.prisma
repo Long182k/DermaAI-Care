@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String                 @id @default(uuid())
+  userName            String                 @unique
+  email               String                 @unique
+  role                Role                   @default(USER)
+  password            String
+  dateOfBirth         DateTime?
+  hashedPassword      String
+  avatarUrl           String?
+  refreshToken        String?
+  hashedRefreshToken  String?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  isActive            Boolean                @default(true)
+  lastLoginAt         DateTime               @default(now())
+  PatientAppointments Appointment[]          @relation("PatientAppointments")
+  DoctorAppointments  Appointment[]          @relation("DoctorAppointments")
+  MedicalRecords      MedicalRecordHistory[]
+  DoctorReviews       Review[]               @relation("DoctorReviews")
+  PatientReviews      Review[]               @relation("PatientReviews")
+  Payments            Payment[]
+  Notifications       Notification[]
+  AIDiagnosisJobs     AIDiagnosisJob[]
+  MessageParticipants MessageParticipant[]
+  Message             Message[]
+}
+
+model MessageRoom {
+  id        String   @id @default(uuid())
+  name      String
+  roomType  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Messages            Message[]
+  MessageParticipants MessageParticipant[]
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  roomId    String
+  senderId  String
+  content   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  Room   MessageRoom @relation(fields: [roomId], references: [id])
+  Sender User        @relation(fields: [senderId], references: [id])
+}
+
+model MessageParticipant {
+  id       String   @id @default(uuid())
+  roomId   String
+  userId   String
+  joinedAt DateTime @default(now())
+
+  Room MessageRoom @relation(fields: [roomId], references: [id])
+  User User        @relation(fields: [userId], references: [id])
+}
+
+model Appointment {
+  id        String   @id @default(uuid())
+  patientId String
+  doctorId  String
+  startTime DateTime
+  endTime   DateTime
+  status    String
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Patient   User       @relation("PatientAppointments", fields: [patientId], references: [id])
+  Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id])
+  Reminders Reminder[]
+}
+
+model Reminder {
+  id            String   @id @default(uuid())
+  appointmentId String
+  method        String
+  createdAt     DateTime @default(now())
+
+  Appointment Appointment @relation(fields: [appointmentId], references: [id])
+}
+
+model MedicalRecordHistory {
+  id        String   @id @default(uuid())
+  userId    String
+  diagnosis String
+  aiReport  Json
+  images    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  User User @relation(fields: [userId], references: [id])
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  doctorId  String
+  patientId String
+  rating    Int
+  message   String
+  createdAt DateTime @default(now())
+
+  Doctor  User @relation("DoctorReviews", fields: [doctorId], references: [id])
+  Patient User @relation("PatientReviews", fields: [patientId], references: [id])
+}
+
+model Payment {
+  id            String   @id @default(uuid())
+  userId        String
+  amount        Float
+  currency      String
+  status        String
+  paymentMethod String
+  transactionId String
+  createdAt     DateTime @default(now())
+
+  User User @relation(fields: [userId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  User User @relation(fields: [userId], references: [id])
+}
+
+model AIDiagnosisJob {
+  id        String   @id @default(uuid())
+  userId    String
+  imageUrl  String
+  status    String
+  result    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  User User @relation(fields: [userId], references: [id])
+}
+
+model MedicalGuidance {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  category    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum Role {
+  ADMIN
+  USER
+}

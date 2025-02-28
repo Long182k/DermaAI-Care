@@ -11,6 +11,9 @@ import { FileModule } from './file/file.module';
 import { PrismaService } from './prisma.service';
 import { UsersController } from './users/users.controller';
 import { UsersModule } from './users/users.module';
+import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
+import { AppointmentModule } from './appointment/appointment.module';
+import { ScheduleModule } from './schedule/schedule.module';
 
 @Module({
   imports: [
@@ -20,6 +23,9 @@ import { UsersModule } from './users/users.module';
     ConfigModule.forFeature(access_tokenJwtConfig),
     ConfigModule.forFeature(refresh_tokenJwtConfig),
     FileModule,
+    NestScheduleModule.forRoot(),
+    AppointmentModule,
+    ScheduleModule,
   ],
   controllers: [UsersController],
   providers: [

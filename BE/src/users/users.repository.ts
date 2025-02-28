@@ -51,7 +51,17 @@ export class UserRepository {
     data.avatarUrl =
       'https://res.cloudinary.com/dcivdqyyj/image/upload/v1736957755/sq1svii2veo8hewyelud.jpg';
 
-    const { userName, password, email, avatarUrl } = data;
+    const {
+      userName,
+      password,
+      email,
+      avatarUrl,
+      dateOfBirth,
+      experience,
+      education,
+      certifications,
+      languages,
+    } = data;
 
     const hashedPassword = await argon.hash(password);
 
@@ -62,6 +72,11 @@ export class UserRepository {
         password,
         hashedPassword,
         avatarUrl,
+        dateOfBirth,
+        experience,
+        education,
+        certifications,
+        languages,
       },
     });
 

@@ -13,6 +13,44 @@
 /FE/build
 /BE/build
 
+# Training specific ignores
+/Training/data/
+/Training/venv/
+/Training/__pycache__/
+/Training/*.pyc
+/Training/*.pyo
+/Training/*.pyd
+/Training/.Python
+/Training/pip-log.txt
+/Training/pip-delete-this-directory.txt
+/Training/.tox/
+/Training/.coverage
+/Training/.coverage.*
+/Training/.cache
+/Training/nosetests.xml
+/Training/coverage.xml
+/Training/*.cover
+/Training/.hypothesis/
+/Training/.pytest_cache/
+/Training/.env
+/Training/logs/
+/Training/checkpoints/
+/Training/saved_models/
+/Training/tensorboard/
+/Training/wandb/
+/Training/mlruns/
+/Training/outputs/
+/Training/results/
+/Training/temp/
+/Training/.ipynb_checkpoints/
+
+# Keep these files
+!/Training/requirements.txt
+!/Training/README.md
+!/Training/src/
+!/Training/tests/
+!/Training/notebooks/*.ipynb
+
 # Testing
 /coverage
 /FE/coverage
@@ -97,3 +135,20 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Model files and directories
+models/
+*.h5
+*.hdf5
+*.pth
+*.ckpt
+*.pb
+mlruns/
+backup/
+
+# Additional ML-related files to ignore
+*.pkl
+*.joblib
+checkpoints/
+logs/
+tensorboard/

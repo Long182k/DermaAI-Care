@@ -8,6 +8,7 @@ import os
 def evaluate_model(model, val_generator):
     """
     Evaluate the model and display results
+    Returns a dictionary of metrics for cross-validation analysis
     """
     # Get predictions
     predictions = model.predict(val_generator)
@@ -17,6 +18,7 @@ def evaluate_model(model, val_generator):
     # Print classification report
     print("\nClassification Report:")
     print("-" * 60)
+    report = classification_report(y_true, y_pred, output_dict=True)
     print(classification_report(y_true, y_pred))
     
     # Plot confusion matrix
@@ -29,9 +31,21 @@ def evaluate_model(model, val_generator):
     plt.show()
     
     # Calculate and print metrics
-    loss, accuracy = model.evaluate(val_generator)
+    loss, accuracy, auc, precision, recall = model.evaluate(val_generator)
     print(f"\nValidation Accuracy: {accuracy*100:.2f}%")
     print(f"Validation Loss: {loss:.4f}")
+    
+    # Return metrics for cross-validation
+    metrics = {
+        'loss': loss,
+        'accuracy': accuracy,
+        'auc': auc,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': report['weighted avg']['f1-score']
+    }
+    
+    return metrics
 
 def save_model(model, filepath):
     """

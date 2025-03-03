@@ -5,12 +5,13 @@ from tensorflow.keras.applications import InceptionResNetV2
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
 
+# Create a single distribution strategy to be used across all model operations
+strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
+
 def build_model(num_classes):
     """
     Build and compile the model with memory optimizations
     """
-    strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
-    
     with strategy.scope():
         # Load the pre-trained InceptionResNetV2 model with smaller input size
         base_model = InceptionResNetV2(
@@ -97,62 +98,63 @@ def train_model(model, train_generator, val_generator, epochs=10, class_weights=
         tf.keras.callbacks.TerminateOnNaN()
     ]
     
-    # Remove the distribution strategy from here
-    with mlflow.start_run():
-        mlflow.log_param("epochs", epochs)
-        mlflow.log_param("batch_size", train_generator.batch_size)
-        
-        if hasattr(model.optimizer, 'learning_rate'):
-            if hasattr(model.optimizer.learning_rate, 'initial_learning_rate'):
-                initial_lr = model.optimizer.learning_rate.initial_learning_rate
-            else:
-                initial_lr = float(model.optimizer.learning_rate)
-        else:
-            initial_lr = float(model.optimizer._learning_rate)
+    with strategy.scope():
+        with mlflow.start_run():
+            mlflow.log_param("epochs", epochs)
+            mlflow.log_param("batch_size", train_generator.batch_size)
             
-        mlflow.log_param("initial_learning_rate", initial_lr)
-        
-        # Configure training to be thread-safe
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
-        
-        history = model.fit(
-            train_generator,
-            validation_data=val_generator,
-            epochs=epochs,
-            callbacks=callbacks,
-            class_weight=class_weights
-        )
-        
-        # Log metrics
-        mlflow.log_metrics({
-            "final_accuracy": history.history['accuracy'][-1],
-            "final_val_accuracy": history.history['val_accuracy'][-1],
-            "final_auc": history.history['auc'][-1],
-            "final_val_auc": history.history['val_auc'][-1],
-            "final_precision": history.history['precision'][-1],
-            "final_val_precision": history.history['val_precision'][-1],
-            "final_recall": history.history['recall'][-1],
-            "final_val_recall": history.history['val_recall'][-1]
-        })
-        
+            if hasattr(model.optimizer, 'learning_rate'):
+                if hasattr(model.optimizer.learning_rate, 'initial_learning_rate'):
+                    initial_lr = model.optimizer.learning_rate.initial_learning_rate
+                else:
+                    initial_lr = float(model.optimizer.learning_rate)
+            else:
+                initial_lr = float(model.optimizer._learning_rate)
+                
+            mlflow.log_param("initial_learning_rate", initial_lr)
+            
+            # Configure training to be thread-safe
+            options = tf.data.Options()
+            options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
+            
+            history = model.fit(
+                train_generator,
+                validation_data=val_generator,
+                epochs=epochs,
+                callbacks=callbacks,
+                class_weight=class_weights
+            )
+            
+            # Log metrics
+            mlflow.log_metrics({
+                "final_accuracy": history.history['accuracy'][-1],
+                "final_val_accuracy": history.history['val_accuracy'][-1],
+                "final_auc": history.history['auc'][-1],
+                "final_val_auc": history.history['val_auc'][-1],
+                "final_precision": history.history['precision'][-1],
+                "final_val_precision": history.history['val_precision'][-1],
+                "final_recall": history.history['recall'][-1],
+                "final_val_recall": history.history['val_recall'][-1]
+            })
+            
     return history
 
 def fine_tune_model(model, train_generator, val_generator, epochs=5):
     """
     Fine-tune the model by unfreezing some layers
     """
-    # Unfreeze the last few layers of the base model
-    base_model = model.layers[1]  # InceptionResNetV2 is the second layer
-    for layer in base_model.layers[-20:]:
-        layer.trainable = True
-    
-    # Recompile with a lower learning rate
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(1e-5),
-        loss='categorical_crossentropy',
-        metrics=['accuracy']
-    )
+    with strategy.scope():
+        # Unfreeze the last few layers of the base model
+        base_model = model.layers[1]  # InceptionResNetV2 is the second layer
+        for layer in base_model.layers[-20:]:
+            layer.trainable = True
+        
+        # Recompile with a lower learning rate
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(1e-5),
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
     
     # Train with frozen layers
     history = train_model(

@@ -5,7 +5,7 @@ from tensorflow.keras.preprocessing.image import load_img, img_to_array
 import os
 from PIL import Image
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.utils.class_weight import compute_class_weight
 
 def preprocess_image(image_path):
@@ -77,9 +77,9 @@ def check_dataset_quality(data_dir):
                     issues.append(f"{image_path}: Corrupted or invalid image - {str(e)}")
     return issues
 
-def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2):
+def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=5):
     """
-    Load and prepare data from ISIC 2020 dataset
+    Load and prepare data from ISIC 2020 dataset using k-fold cross validation
     """
     # Read the CSV file
     df = pd.read_csv(csv_path)
@@ -114,21 +114,27 @@ def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2):
     print("Classes:", list(diagnosis_to_idx.keys()))
     
     try:
-        # Split data into train and validation
-        train_df, val_df = train_test_split(
-            df, 
-            test_size=0.2,
-            stratify=df['diagnosis'],
-            random_state=42
-        )
+        # Initialize KFold cross validator
+        kfold = KFold(n_splits=n_folds, shuffle=True, random_state=42)
         
-        print(f"\nTraining set size: {len(train_df)}")
-        print(f"Validation set size: {len(val_df)}")
+        # Store fold indices
+        fold_indices = []
+        for fold_idx, (train_idx, val_idx) in enumerate(kfold.split(df)):
+            fold_indices.append({
+                'fold': fold_idx + 1,
+                'train_idx': train_idx,
+                'val_idx': val_idx,
+                'train_size': len(train_idx),
+                'val_size': len(val_idx)
+            })
+            print(f"\nFold {fold_idx + 1}:")
+            print(f"Training size: {len(train_idx)}")
+            print(f"Validation size: {len(val_idx)}")
         
-        return train_df, val_df, diagnosis_to_idx
+        return df, fold_indices, diagnosis_to_idx
         
     except Exception as e:
-        print(f"\nError in train-test split: {str(e)}")
+        print(f"\nError in k-fold split: {str(e)}")
         print("Dataset statistics:")
         print(df['diagnosis'].value_counts())
         raise
@@ -182,15 +188,25 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
         
         return batch_x, batch_y
 
-def create_generators(csv_path, image_dir, batch_size=16, min_samples_per_class=2):
+def create_generators(csv_path, image_dir, fold_idx=0, batch_size=16, min_samples_per_class=2, n_folds=5):
     """
-    Create train and validation generators with optimized memory usage
+    Create train and validation generators for a specific fold
     """
-    train_df, val_df, diagnosis_to_idx = load_and_prepare_data(
+    df, fold_indices, diagnosis_to_idx = load_and_prepare_data(
         csv_path, 
         image_dir,
-        min_samples_per_class=min_samples_per_class
+        min_samples_per_class=min_samples_per_class,
+        n_folds=n_folds
     )
+    
+    # Get indices for the specified fold
+    fold_data = fold_indices[fold_idx]
+    train_idx = fold_data['train_idx']
+    val_idx = fold_data['val_idx']
+    
+    # Create train and validation dataframes for this fold
+    train_df = df.iloc[train_idx]
+    val_df = df.iloc[val_idx]
     
     # Create generators with smaller batch size
     train_generator = ISICDataGenerator(
@@ -208,7 +224,7 @@ def create_generators(csv_path, image_dir, batch_size=16, min_samples_per_class=
     )
     
     n_classes = len(diagnosis_to_idx)
-    return train_generator, val_generator, diagnosis_to_idx, n_classes
+    return train_generator, val_generator, diagnosis_to_idx, n_classes, len(fold_indices)
 
 def analyze_dataset(csv_path):
     """
@@ -257,8 +273,8 @@ if __name__ == "__main__":
     print(dataset_stats['class_weights'])
     
     # Create generators
-    train_gen, val_gen, diagnosis_to_idx, n_classes = create_generators(
+    train_gen, val_gen, diagnosis_to_idx, n_classes, fold_size = create_generators(
         CSV_PATH,
         IMAGE_DIR,
-        batch_size=16
+        fold_idx=0
     ) 

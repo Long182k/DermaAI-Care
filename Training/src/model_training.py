@@ -70,23 +70,25 @@ def cross_validate_model(model, data, labels, k=5):
         )
         scores.append(history.history['val_accuracy'][-1]) 
 
-def train_model(model, train_generator, val_generator, epochs=10, class_weights=None):
+def train_model(model, train_generator, val_generator, epochs=8, class_weights=None, early_stopping_patience=3, reduce_lr_patience=2):
     """
-    Enhanced training function with proper distribution strategy
+    Enhanced training function with proper distribution strategy and early stopping
     """
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor='val_accuracy',
-            patience=5,
+            patience=early_stopping_patience,
             restore_best_weights=True,
-            mode='max'
+            mode='max',
+            min_delta=0.01  # Minimum change to qualify as an improvement
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_accuracy',
-            factor=0.5,
-            patience=3,
+            factor=0.2,
+            patience=reduce_lr_patience,
             min_lr=1e-6,
-            mode='max'
+            mode='max',
+            verbose=1
         ),
         tf.keras.callbacks.ModelCheckpoint(
             'models/checkpoint.h5',
@@ -113,16 +115,23 @@ def train_model(model, train_generator, val_generator, epochs=10, class_weights=
                 
             mlflow.log_param("initial_learning_rate", initial_lr)
             
-            # Configure training to be thread-safe
+            # Use mixed precision for faster training
+            tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            
+            # Configure training to be thread-safe and optimize for performance
             options = tf.data.Options()
             options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
+            options.experimental_optimization.parallel_batch = True
             
             history = model.fit(
                 train_generator,
                 validation_data=val_generator,
                 epochs=epochs,
                 callbacks=callbacks,
-                class_weight=class_weights
+                class_weight=class_weights,
+                workers=4,  # Increased number of workers
+                use_multiprocessing=True,
+                max_queue_size=32
             )
             
             # Log metrics
@@ -139,9 +148,9 @@ def train_model(model, train_generator, val_generator, epochs=10, class_weights=
             
     return history
 
-def fine_tune_model(model, train_generator, val_generator, epochs=5):
+def fine_tune_model(model, train_generator, val_generator, epochs=4, early_stopping_patience=2):
     """
-    Fine-tune the model by unfreezing some layers
+    Fine-tune the model by unfreezing some layers with early stopping
     """
     with strategy.scope():
         # Unfreeze the last few layers of the base model
@@ -153,7 +162,10 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5):
         model.compile(
             optimizer=tf.keras.optimizers.Adam(1e-5),
             loss='categorical_crossentropy',
-            metrics=['accuracy']
+            metrics=['accuracy', 
+                    tf.keras.metrics.AUC(name='auc'),
+                    tf.keras.metrics.Precision(name='precision'),
+                    tf.keras.metrics.Recall(name='recall')]
         )
     
     # Train with frozen layers
@@ -161,7 +173,9 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5):
         model,
         train_generator,
         val_generator,
-        epochs=epochs
+        epochs=epochs,
+        early_stopping_patience=early_stopping_patience,
+        reduce_lr_patience=1  # Faster LR reduction during fine-tuning
     )
     
     return history 

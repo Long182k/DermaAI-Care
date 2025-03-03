@@ -78,7 +78,7 @@ def main():
         
         # Parameters for k-fold cross validation
         n_folds = 5  # Number of folds
-        batch_size = 16  # Reduced batch size for Colab
+        batch_size = 32  # Increased batch size for faster training
         
         # Store metrics for each fold
         fold_metrics = []
@@ -111,8 +111,10 @@ def main():
                 model,
                 train_gen,
                 val_gen,
-                epochs=15,  # More epochs for initial training
-                class_weights=dataset_stats['class_weights']  # Use class weights for imbalanced data
+                epochs=8,  # Reduced from 15 to 8
+                class_weights=dataset_stats['class_weights'],
+                early_stopping_patience=3,  # Added early stopping patience
+                reduce_lr_patience=2  # Added learning rate reduction patience
             )
             
             # Phase 2: Fine-tuning
@@ -121,7 +123,8 @@ def main():
                 model,
                 train_gen,
                 val_gen,
-                epochs=10
+                epochs=4,  # Reduced from 10 to 4
+                early_stopping_patience=2  # Added early stopping patience for fine-tuning
             )
             
             # Evaluate model for this fold

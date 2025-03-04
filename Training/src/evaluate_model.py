@@ -49,14 +49,14 @@ def evaluate_model(model, val_generator):
 
 def save_model(model, filepath):
     """
-    Save the trained model
+    Save the trained model with custom objects
     """
     try:
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        # Save the model
-        model.save(filepath)
+        # Save the model with custom objects
+        model.save(filepath, save_format='h5')
         print(f"\nModel successfully saved to: {filepath}")
         
         # Save model summary
@@ -64,6 +64,15 @@ def save_model(model, filepath):
         with open(summary_path, 'w') as f:
             model.summary(print_fn=lambda x: f.write(x + '\n'))
         print(f"Model summary saved to: {summary_path}")
+        
+        # Save model architecture visualization
+        try:
+            from tensorflow.keras.utils import plot_model
+            arch_path = os.path.join(os.path.dirname(filepath), 'model_architecture.png')
+            plot_model(model, to_file=arch_path, show_shapes=True, show_layer_names=True)
+            print(f"Model architecture visualization saved to: {arch_path}")
+        except Exception as viz_error:
+            print(f"Warning: Could not save model visualization: {viz_error}")
         
     except Exception as e:
         print(f"Error saving model: {str(e)}")

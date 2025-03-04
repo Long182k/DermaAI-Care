@@ -5,30 +5,32 @@ from tensorflow.keras.applications import InceptionResNetV2
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
 
+# Define strategy at module level so it can be imported
+strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
+
 def build_model(num_classes):
     """
     Build and compile the model with memory optimizations
     """
-    strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
-    
     with strategy.scope():
         # Load the pre-trained InceptionResNetV2 model with smaller input size
         base_model = InceptionResNetV2(
             weights='imagenet',
             include_top=False,
-            input_shape=(224, 224, 3)
+            input_shape=(224, 224, 3),
+            pooling='avg'  # Use average pooling to handle dimensions consistently
         )
         
         # Freeze all layers initially
         base_model.trainable = False
         
-        # Simplified classification head
+        # Build the model using Functional API with proper dimension handling
         inputs = tf.keras.Input(shape=(224, 224, 3))
         x = base_model(inputs, training=False)
-        x = GlobalAveragePooling2D()(x)
-        x = Dense(512, activation='relu')(x)
+        # Remove the separate GlobalAveragePooling2D since we use pooling='avg' in base_model
+        x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
         x = Dropout(0.5)(x)
-        outputs = Dense(num_classes, activation='softmax')(x)
+        outputs = Dense(num_classes, activation='softmax', kernel_initializer='he_normal')(x)
         
         model = Model(inputs=inputs, outputs=outputs)
         
@@ -51,9 +53,6 @@ def build_model(num_classes):
             ]
         )
         
-        # Build the model
-        model.build((None, 224, 224, 3))
-        
         return model
 
 def cross_validate_model(model, data, labels, k=5):
@@ -69,7 +68,7 @@ def cross_validate_model(model, data, labels, k=5):
         )
         scores.append(history.history['val_accuracy'][-1]) 
 
-def train_model(model, train_generator, val_generator, epochs=8, class_weights=None, early_stopping_patience=3, reduce_lr_patience=2):
+def train_model(model, train_generator, val_generator, epochs, class_weights=None, early_stopping_patience=3, reduce_lr_patience=2):
     """
     Enhanced training function with proper distribution strategy and early stopping
     """
@@ -143,28 +142,66 @@ def train_model(model, train_generator, val_generator, epochs=8, class_weights=N
         
     return history
 
-def fine_tune_model(model, train_generator, val_generator, epochs=5):
+def fine_tune_model(model, train_generator, val_generator, epochs=4, early_stopping_patience=2):
     """
-    Fine-tune the model by unfreezing some layers
+    Fine-tune the model by unfreezing some layers with early stopping
     """
-    # Unfreeze the last few layers of the base model
-    base_model = model.layers[1]  # InceptionResNetV2 is the second layer
-    for layer in base_model.layers[-20:]:
-        layer.trainable = True
+    print("Preparing model for fine-tuning...")
     
-    # Recompile with a lower learning rate
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(1e-5),
-        loss='categorical_crossentropy',
-        metrics=['accuracy']
-    )
+    # Ensure we're using the correct strategy
+    if not tf.distribute.get_strategy() == strategy:
+        print("Recreating model in the correct strategy scope...")
+        with strategy.scope():
+            # Get the model's weights
+            weights = model.get_weights()
+            
+            # Recreate the model architecture consistently with build_model
+            base_model = InceptionResNetV2(
+                weights='imagenet',
+                include_top=False,
+                input_shape=(224, 224, 3),
+                pooling='avg'
+            )
+            
+            inputs = tf.keras.Input(shape=(224, 224, 3))
+            x = base_model(inputs, training=True)
+            x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
+            x = Dropout(0.5)(x)
+            outputs = Dense(model.output_shape[-1], activation='softmax', kernel_initializer='he_normal')(x)
+            
+            model = Model(inputs=inputs, outputs=outputs)
+            
+            # Restore weights
+            try:
+                model.set_weights(weights)
+                print("Weights restored successfully")
+            except ValueError as e:
+                print(f"Error restoring weights: {e}")
+                print("Creating fresh model for fine-tuning...")
+            
+            # Unfreeze the last few layers of the base model
+            base_model.trainable = True
+            for layer in base_model.layers[:-20]:  # Freeze all except last 20 layers
+                layer.trainable = False
+            
+            # Recompile with a lower learning rate
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(1e-5),
+                loss='categorical_crossentropy',
+                metrics=['accuracy',
+                        tf.keras.metrics.AUC(name='auc'),
+                        tf.keras.metrics.Precision(name='precision'),
+                        tf.keras.metrics.Recall(name='recall')]
+            )
     
-    # Train with frozen layers
+    # Train with fine-tuning
     history = train_model(
         model,
         train_generator,
         val_generator,
-        epochs=epochs
+        epochs=epochs,
+        early_stopping_patience=early_stopping_patience,
+        reduce_lr_patience=1  # Faster LR reduction during fine-tuning
     )
     
-    return history 
+    return history

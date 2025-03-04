@@ -35,48 +35,6 @@ def create_augmentation_pipeline():
         tf.keras.layers.RandomContrast(0.2),
     ])
 
-def validate_image(image_path):
-    """
-    Validate if image meets the requirements
-    """
-    try:
-        img = load_img(image_path)
-        
-        # Check image dimensions
-        if img.size != (299, 299):
-            print(f"Warning: Image size {img.size} will be resized to (299, 299)")
-        
-        # Check color channels
-        img_array = img_to_array(img)
-        if img_array.shape[-1] != 3:
-            raise ValueError("Image must be in RGB format (3 channels)")
-            
-        return True
-        
-    except Exception as e:
-        print(f"Error validating image: {str(e)}")
-        return False
-
-def check_dataset_quality(data_dir):
-    """
-    Check quality of the entire dataset
-    """
-    issues = []
-    for root, _, files in os.walk(data_dir):
-        for file in files:
-            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image_path = os.path.join(root, file)
-                try:
-                    with Image.open(image_path) as img:
-                        if img.mode != 'RGB':
-                            issues.append(f"{image_path}: Not in RGB mode")
-                        if img.size[0] < 299 or img.size[1] < 299:
-                            issues.append(f"{image_path}: Smaller than required 299x299")
-                        img.verify()
-                except Exception as e:
-                    issues.append(f"{image_path}: Corrupted or invalid image - {str(e)}")
-    return issues
-
 def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=5):
     """
     Load and prepare data from ISIC 2020 dataset using k-fold cross validation

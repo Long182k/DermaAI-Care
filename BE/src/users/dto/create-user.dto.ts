@@ -1,5 +1,11 @@
 import { Languages, Role } from '@prisma/client';
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsEmail,
+  IsISO8601,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
 export class CreateUserDTO {
   @IsString()
@@ -22,6 +28,7 @@ export class CreateUserDTO {
   avatarUrl?: string;
 
   @IsOptional()
+  @IsISO8601()
   dateOfBirth?: Date;
 
   @IsOptional()

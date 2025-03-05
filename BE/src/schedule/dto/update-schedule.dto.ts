@@ -1,14 +1,14 @@
-import { IsDate, IsEnum, IsOptional } from 'class-validator';
+import { IsDate, IsEnum, IsISO8601, IsOptional } from 'class-validator';
 import { ScheduleStatus } from '@prisma/client';
 
 export class UpdateScheduleDto {
   @IsOptional()
-  @IsDate()
-  startTime?: Date;
+  @IsISO8601()
+  startTime?: string;
 
   @IsOptional()
-  @IsDate()
-  endTime?: Date;
+  @IsISO8601()
+  endTime?: string;
 
   @IsOptional()
   @IsEnum(ScheduleStatus)

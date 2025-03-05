@@ -88,8 +88,8 @@ model MessageParticipant {
 model Schedule {
   id        String         @id @default(uuid())
   doctorId  String
-  startTime DateTime
-  endTime   DateTime
+  startTime String
+  endTime   String
   status    ScheduleStatus @default(AVAILABLE)
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt

@@ -13,9 +13,10 @@ export const Navbar = () => {
 
   const languages = [
     { code: "en", name: "English" },
-    { code: "fr", name: "Français" },
+    { code: "fr", name: "French" },
     { code: "ja", name: "Japanese" },
-    { code: "vi", name: "Tiếng Việt" },
+    { code: "Sp", name: "Spanish" },
+    { code: "vi", name: "Vietnamese" },
   ];
 
   const handleLanguageChange = (code: string) => {

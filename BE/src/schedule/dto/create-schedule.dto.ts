@@ -1,15 +1,15 @@
-import { IsDate, IsEnum, IsString } from 'class-validator';
+import { IsDate, IsEnum, IsISO8601, IsString } from 'class-validator';
 import { ScheduleStatus } from '@prisma/client';
 
 export class CreateScheduleDto {
   @IsString()
   doctorId: string;
 
-  @IsDate()
-  startTime: Date;
+  @IsISO8601()
+  startTime: string;
 
-  @IsDate()
-  endTime: Date;
+  @IsISO8601()
+  endTime: string;
 
   @IsEnum(ScheduleStatus)
   status: ScheduleStatus;

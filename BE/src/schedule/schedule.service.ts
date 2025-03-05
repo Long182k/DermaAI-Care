@@ -24,16 +24,28 @@ export class ScheduleService {
         // Morning schedule (8 AM - 12 PM)
         schedules.push({
           doctorId,
-          startTime: currentDate.clone().set({ hour: 8, minute: 0 }).toDate(),
-          endTime: currentDate.clone().set({ hour: 12, minute: 0 }).toDate(),
+          startTime: currentDate
+            .clone()
+            .set({ hour: 8, minute: 0, second: 0, millisecond: 0 })
+            .toISOString(), // Explicitly format as ISO 8601
+          endTime: currentDate
+            .clone()
+            .set({ hour: 12, minute: 0, second: 0, millisecond: 0 })
+            .toISOString(), // Explicitly format as ISO 8601
           status: ScheduleStatus.AVAILABLE,
         });
 
         // Afternoon schedule (1 PM - 6 PM)
         schedules.push({
           doctorId,
-          startTime: currentDate.clone().set({ hour: 13, minute: 0 }).toDate(),
-          endTime: currentDate.clone().set({ hour: 18, minute: 0 }).toDate(),
+          startTime: currentDate
+            .clone()
+            .set({ hour: 13, minute: 0, second: 0, millisecond: 0 })
+            .toISOString(), // Explicitly format as ISO 8601
+          endTime: currentDate
+            .clone()
+            .set({ hour: 18, minute: 0, second: 0, millisecond: 0 })
+            .toISOString(), // Explicitly format as ISO 8601
           status: ScheduleStatus.AVAILABLE,
         });
       }
@@ -48,8 +60,8 @@ export class ScheduleService {
       where: {
         doctorId,
         startTime: {
-          gte: startDate,
-          lte: endDate,
+          gte: startDate.toDateString(),
+          lte: endDate.toDateString(),
         },
       },
       orderBy: {

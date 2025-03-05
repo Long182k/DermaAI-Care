@@ -1,14 +1,11 @@
 import {
   Body,
   Controller,
-  Delete,
   Get,
   Param,
   Patch,
   UploadedFile,
   UseInterceptors,
-  Post,
-  Query,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from 'src/auth/@decorator/current-user.decorator';

@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { ScheduleService } from './schedule.service';
-import { Role } from '@prisma/client';
 
 @Injectable()
 export class ScheduleTasksService {
@@ -13,11 +13,14 @@ export class ScheduleTasksService {
     private scheduleService: ScheduleService,
   ) {}
 
-  // Run at 00:00 on January 1st
-  @Cron('0 0 1 1 *')
-  async handleYearlyScheduleGeneration() {
-    this.logger.log('Starting yearly schedule generation for doctors...');
+  // Run at midnight on the first day of every month
+  @Cron('0 0 1 * *')
+  async handleMonthlyScheduleGeneration() {
+    this.logger.log('Starting monthly schedule generation for doctors...');
+    await this.generateSchedulesForDoctors();
+  }
 
+  async generateSchedulesForDoctors() {
     try {
       // Get all doctors
       const doctors = await this.prisma.user.findMany({
@@ -30,15 +33,16 @@ export class ScheduleTasksService {
       // Generate schedules for each doctor
       for (const doctor of doctors) {
         await this.scheduleService.generateDefaultSchedule(doctor.id);
-        this.logger.log(`Generated schedule for doctor: ${doctor.userName}`);
+        this.logger.log(
+          `Generated monthly schedule for doctor: ${doctor.userName}`,
+        );
       }
 
-      this.logger.log('Yearly schedule generation completed successfully');
+      this.logger.log('Monthly schedule generation completed successfully');
+      return { message: 'Schedule generation completed successfully' };
     } catch (error) {
-      this.logger.error(
-        'Error during yearly schedule generation:',
-        error.stack,
-      );
+      this.logger.error('Error during schedule generation:', error.stack);
+      throw error;
     }
   }
 }

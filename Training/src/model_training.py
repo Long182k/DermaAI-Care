@@ -68,7 +68,7 @@ def cross_validate_model(model, data, labels, k=5):
         )
         scores.append(history.history['val_accuracy'][-1]) 
 
-def train_model(model, train_generator, val_generator, epochs, class_weights=None, early_stopping_patience=3, reduce_lr_patience=2):
+def train_model(model, train_generator, val_generator, epochs, early_stopping_patience, reduce_lr_patience, class_weights=None):
     """
     Enhanced training function with proper distribution strategy and early stopping
     """
@@ -142,7 +142,7 @@ def train_model(model, train_generator, val_generator, epochs, class_weights=Non
         
     return history
 
-def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopping_patience=2):
+def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience):
     """
     Fine-tune the model by unfreezing some layers with early stopping
     """

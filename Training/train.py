@@ -30,7 +30,7 @@ def setup_gpu():
                     # Reduce memory limit further to avoid OOM
                     tf.config.experimental.set_virtual_device_configuration(
                         gpu,
-                        [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=2048)]
+                        [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=6144)]
                     )
                     print(f"Successfully configured GPU: {gpu}")
                 except RuntimeError as e:
@@ -78,12 +78,14 @@ def main():
         train_gen, val_gen, diagnosis_to_idx, n_classes, _ = create_generators(
             CSV_PATH,
             IMAGE_DIR,
-            batch_size=16,
-            min_samples_per_class=10
+            batch_size=24,
+            min_samples_per_class=10,
+            n_folds=5,
+            fold_idx=0
         )
         
         # Choose whether to start from Phase 1 or load model for Phase 2
-        START_FROM_PHASE_2 = True  # Set this to True to start from Phase 2
+        START_FROM_PHASE_2 = False  # Set this to True to start from Phase 2
         
         if not START_FROM_PHASE_2:
             # Phase 1: Initial Training
@@ -93,10 +95,11 @@ def main():
                 model, 
                 train_gen, 
                 val_gen,
-                epochs=8,
-                class_weights=dataset_stats['class_weights'],
+                epochs=1,
+                # class_weights=dataset_stats['class_weights'],
                 early_stopping_patience=3,
-                reduce_lr_patience=2
+                reduce_lr_patience=3,
+                class_weights=None
             )
         else:
             # Load pre-trained model for Phase 2
@@ -117,10 +120,11 @@ def main():
                     print("Model loaded successfully!")
                 except Exception as e:
                     print(f"Error loading saved model: {e}")
-                    print("Creating fresh model...")
-                    # Create a new model if loading fails
-                    model = build_model(num_classes=n_classes)
-                    print("Fresh model created successfully.")
+                    return
+                    # print("Creating fresh model...")
+                    # # Create a new model if loading fails
+                    # model = build_model(num_classes=n_classes)
+                    # print("Fresh model created successfully.")
         
         # Clear session before fine-tuning
         tf.keras.backend.clear_session()
@@ -130,8 +134,8 @@ def main():
             model,
             train_gen,
             val_gen,
-            epochs=5,
-            early_stopping_patience=2
+            epochs=1,
+            early_stopping_patience=4
         )
         
         # Evaluate model

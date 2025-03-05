@@ -146,7 +146,7 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
         
         return batch_x, batch_y
 
-def create_generators(csv_path, image_dir, fold_idx=0, batch_size=16, min_samples_per_class=2, n_folds=5):
+def create_generators(csv_path, image_dir, batch_size, min_samples_per_class, n_folds,fold_idx):
     """
     Create train and validation generators for a specific fold
     """

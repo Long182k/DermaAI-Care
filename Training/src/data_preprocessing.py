@@ -133,6 +133,9 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
             img = load_img(self.image_paths[idx], target_size=(224, 224))
             img_array = img_to_array(img)
             
+            # Ensure image is resized to 224x224
+            img_array = tf.image.resize(img_array, [224, 224])
+            
             if self.is_training and self.augmentation:
                 img_array = self.augmentation(img_array)
             

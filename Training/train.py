@@ -63,7 +63,7 @@ def main():
     # Define paths
     CSV_PATH = "data/ISIC_2020_Training_GroundTruth_v2.csv"
     IMAGE_DIR = "data/train"
-    MODEL_SAVE_PATH = "models/skin_disease_model.h5"
+    MODEL_SAVE_PATH = "models/skinning_cancer_prediction_model.h5"
     CHECKPOINT_PATH = "models/checkpoint.h5"  # Path to load pre-trained model
     
     # Create models directory if it doesn't exist
@@ -95,7 +95,7 @@ def main():
                 model, 
                 train_gen, 
                 val_gen,
-                epochs=1,
+                epochs=15,
                 # class_weights=dataset_stats['class_weights'],
                 early_stopping_patience=3,
                 reduce_lr_patience=3,
@@ -134,7 +134,7 @@ def main():
             model,
             train_gen,
             val_gen,
-            epochs=1,
+            epochs=10,
             early_stopping_patience=4
         )
         

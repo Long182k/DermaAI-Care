@@ -23,14 +23,15 @@ def evaluate_model(model, val_generator):
     report = classification_report(y_true, y_pred, output_dict=True)
     print(classification_report(y_true, y_pred))
     
-    # Plot confusion matrix
+    # Plot confusion matrix and save to file
     plt.figure(figsize=(10, 8))
     cm = confusion_matrix(y_true, y_pred)
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
     plt.title('Confusion Matrix')
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
-    plt.show()
+    plt.savefig('models/confusion_matrix.png')  # Save the plot to a file
+    plt.close()  # Close the plot to free up resources
     
     # Calculate and print metrics
     loss, accuracy, auc, precision, recall = model.evaluate(val_generator)

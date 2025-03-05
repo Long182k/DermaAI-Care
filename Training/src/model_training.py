@@ -142,7 +142,7 @@ def train_model(model, train_generator, val_generator, epochs, class_weights=Non
         
     return history
 
-def fine_tune_model(model, train_generator, val_generator, epochs=1, early_stopping_patience=2):
+def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopping_patience=2):
     """
     Fine-tune the model by unfreezing some layers with early stopping
     """

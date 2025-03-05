@@ -130,7 +130,7 @@ def main():
             model,
             train_gen,
             val_gen,
-            epochs=1,
+            epochs=5,
             early_stopping_patience=2
         )
         

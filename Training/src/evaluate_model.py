@@ -13,7 +13,9 @@ def evaluate_model(model, val_generator):
     # Get predictions
     predictions = model.predict(val_generator)
     y_pred = np.argmax(predictions, axis=1)
-    y_true = val_generator.classes
+    
+    # Convert y_true to numerical labels using diagnosis_to_idx
+    y_true = np.array([val_generator.diagnosis_to_idx[diag] for diag in val_generator.diagnoses])
     
     # Print classification report
     print("\nClassification Report:")

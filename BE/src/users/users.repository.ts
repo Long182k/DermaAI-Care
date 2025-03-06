@@ -35,9 +35,7 @@ export class UserRepository {
     }
   }
 
-  async findAllUsers(
-    userId: string, //   params: {
-  ): Promise<User[]> {
+  async findAllUsers(userId: string): Promise<User[]> {
     return this.prisma.user.findMany({
       where: {
         NOT: {
@@ -61,6 +59,7 @@ export class UserRepository {
       education,
       certifications,
       languages,
+      role,
     } = data;
 
     const hashedPassword = await argon.hash(password);
@@ -77,6 +76,7 @@ export class UserRepository {
         education,
         certifications,
         languages,
+        role,
       },
     });
 

@@ -27,11 +27,11 @@ export class ScheduleService {
           startTime: currentDate
             .clone()
             .set({ hour: 8, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(), // Explicitly format as ISO 8601
+            .toISOString(),
           endTime: currentDate
             .clone()
             .set({ hour: 12, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(), // Explicitly format as ISO 8601
+            .toISOString(),
           status: ScheduleStatus.AVAILABLE,
         });
 
@@ -41,11 +41,11 @@ export class ScheduleService {
           startTime: currentDate
             .clone()
             .set({ hour: 13, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(), // Explicitly format as ISO 8601
+            .toISOString(),
           endTime: currentDate
             .clone()
             .set({ hour: 18, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(), // Explicitly format as ISO 8601
+            .toISOString(),
           status: ScheduleStatus.AVAILABLE,
         });
       }
@@ -60,8 +60,8 @@ export class ScheduleService {
       where: {
         doctorId,
         startTime: {
-          gte: startDate.toDateString(),
-          lte: endDate.toDateString(),
+          gte: new Date(startDate).toISOString(),
+          lte: new Date(endDate).toISOString(),
         },
       },
       orderBy: {
@@ -91,9 +91,16 @@ export class ScheduleService {
       );
     }
 
+    const { startTime, endTime } = updateScheduleDto;
+
+    const updatedData: UpdateScheduleDto = {
+      startTime: new Date(startTime).toISOString(),
+      endTime: new Date(endTime).toISOString(),
+    };
+
     return await this.prisma.schedule.update({
       where: { id: scheduleId },
-      data: updateScheduleDto,
+      data: updatedData,
     });
   }
 }

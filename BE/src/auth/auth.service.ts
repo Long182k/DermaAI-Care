@@ -211,7 +211,7 @@ export class AuthService {
 
     await this.mailerService.sendMail({
       to: email,
-      subject: 'Friendzii Social Media Platform - Password Reset',
+      subject: 'DermaAI Skinning Cancer Prediction Platform - Password Reset',
       template: 'forgot-password',
       context: {
         name: user.userName,

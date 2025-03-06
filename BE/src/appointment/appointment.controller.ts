@@ -24,11 +24,11 @@ export class AppointmentController {
   @Post()
   async createAppointment(
     @Body() createAppointmentDto: CreateAppointmentDto,
-    @CurrentUser() currentUser: User,
+    @CurrentUser('userId') userId: string,
   ) {
     return await this.appointmentService.createAppointment(
       createAppointmentDto,
-      currentUser,
+      userId,
     );
   }
 

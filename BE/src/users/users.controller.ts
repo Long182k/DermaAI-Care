@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Patch,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -28,9 +29,14 @@ export class UsersController {
     return this.usersService.findAll(userId);
   }
 
-  @Get('/userName')
-  findOne(@Param('userName') userName: string) {
-    return this.usersService.findOne(userName);
+  @Get('/email_param/:email')
+  findOne(@Param('email') email: string) {
+    return this.usersService.findOne(email);
+  }
+
+  @Get('/email_query')
+  findOne2(@Query('email') email: string) {
+    return this.usersService.findOne(email);
   }
 
   @Roles(ROLE.ADMIN)

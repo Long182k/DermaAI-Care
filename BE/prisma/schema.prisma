@@ -63,8 +63,8 @@ model Message {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  Room   MessageRoom @relation(fields: [roomId], references: [id])
-  Sender User        @relation(fields: [senderId], references: [id])
+  Room   MessageRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  Sender User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
 
   @@index([roomId])
   @@index([senderId])
@@ -78,8 +78,8 @@ model MessageParticipant {
   userId   String
   joinedAt DateTime @default(now())
 
-  Room MessageRoom @relation(fields: [roomId], references: [id])
-  User User        @relation(fields: [userId], references: [id])
+  Room MessageRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  User User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([roomId])
   @@index([userId])
@@ -88,13 +88,13 @@ model MessageParticipant {
 model Schedule {
   id        String         @id @default(uuid())
   doctorId  String
-  startTime String
-  endTime   String
+  startTime DateTime
+  endTime   DateTime
   status    ScheduleStatus @default(AVAILABLE)
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  Doctor      User         @relation("DoctorSchedules", fields: [doctorId], references: [id])
+  Doctor      User         @relation("DoctorSchedules", fields: [doctorId], references: [id], onDelete: Cascade)
   Appointment Appointment?
 
   @@index([doctorId])
@@ -113,10 +113,10 @@ model Appointment {
   updatedAt  DateTime @updatedAt
   scheduleId String   @unique
 
-  Patient   User       @relation("PatientAppointments", fields: [patientId], references: [id])
-  Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id])
+  Patient   User       @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
+  Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
   Reminders Reminder[]
-  Schedule  Schedule   @relation(fields: [scheduleId], references: [id])
+  Schedule  Schedule   @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
 
   @@index([patientId])
   @@index([doctorId])
@@ -130,7 +130,7 @@ model Reminder {
   method        String
   createdAt     DateTime @default(now())
 
-  Appointment Appointment @relation(fields: [appointmentId], references: [id])
+  Appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
 
   @@index([appointmentId])
   @@index([method])
@@ -145,7 +145,7 @@ model MedicalRecordHistory {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([createdAt])
@@ -159,8 +159,8 @@ model Review {
   message   String
   createdAt DateTime @default(now())
 
-  Doctor  User @relation("DoctorReviews", fields: [doctorId], references: [id])
-  Patient User @relation("PatientReviews", fields: [patientId], references: [id])
+  Doctor  User @relation("DoctorReviews", fields: [doctorId], references: [id], onDelete: Cascade)
+  Patient User @relation("PatientReviews", fields: [patientId], references: [id], onDelete: Cascade)
 
   @@index([doctorId])
   @@index([patientId])
@@ -178,7 +178,7 @@ model Payment {
   transactionId String
   createdAt     DateTime @default(now())
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])
@@ -194,7 +194,7 @@ model Notification {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([isRead])
@@ -210,7 +210,7 @@ model AIDiagnosisJob {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])

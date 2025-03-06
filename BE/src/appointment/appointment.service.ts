@@ -1,25 +1,33 @@
 import {
-  Injectable,
-  ForbiddenException,
   ConflictException,
+  ForbiddenException,
+  Injectable,
 } from '@nestjs/common';
+import { ScheduleStatus, User } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
-import { Appointment, ScheduleStatus, User } from '@prisma/client';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
+import { MailerService } from '@nestjs-modules/mailer';
 
 @Injectable()
 export class AppointmentService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly mailerService: MailerService,
+  ) {}
 
   async createAppointment(
     createAppointmentDto: CreateAppointmentDto,
-    currentUser: User,
+    userId: string,
   ) {
-    const { scheduleId, notes } = createAppointmentDto;
+    const { scheduleId, notes, patientId } = createAppointmentDto;
 
     // Start transaction to ensure data consistency
     return await this.prisma.$transaction(async (tx) => {
+      const currentUserRole = await tx.user.findUnique({
+        where: { id: userId },
+      });
+
       // Check if schedule is available
       const schedule = await tx.schedule.findUnique({
         where: { id: scheduleId },
@@ -40,10 +48,13 @@ export class AppointmentService {
         data: { status: ScheduleStatus.BOOKED },
       });
 
+      const mappedPatientId =
+        currentUserRole.role === 'PATIENT' ? userId : patientId;
+
       // Create appointment
       const appointment = await tx.appointment.create({
         data: {
-          patientId: currentUser.id,
+          patientId: mappedPatientId,
           doctorId: schedule.doctorId,
           scheduleId,
           status: 'SCHEDULED',
@@ -55,7 +66,6 @@ export class AppointmentService {
           Schedule: true,
         },
       });
-
       // Create reminder
       await tx.reminder.create({
         data: {
@@ -63,6 +73,24 @@ export class AppointmentService {
           method: 'EMAIL',
         },
       });
+
+      if (appointment) {
+        await this.mailerService.sendMail({
+          to: appointment.Patient.email,
+          subject: `Appointment Reminder: Your Appointment with Dr. ${appointment.Doctor.userName}`,
+          template: 'appointment-reminder',
+          context: {
+            patientName: appointment.Patient.userName,
+            doctorName: appointment.Doctor.userName,
+            appointmentStartTime: appointment.Schedule.startTime,
+            appointmentEndTime: appointment.Schedule.endTime,
+            notes: appointment.notes,
+            doctorEmail: appointment.Doctor.email,
+            doctorAvatar: appointment.Doctor.avatarUrl,
+            year: new Date().getFullYear(),
+          },
+        });
+      }
 
       return appointment;
     });

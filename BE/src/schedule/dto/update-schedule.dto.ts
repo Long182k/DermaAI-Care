@@ -3,11 +3,9 @@ import { ScheduleStatus } from '@prisma/client';
 
 export class UpdateScheduleDto {
   @IsOptional()
-  @IsISO8601()
   startTime?: string;
 
   @IsOptional()
-  @IsISO8601()
   endTime?: string;
 
   @IsOptional()

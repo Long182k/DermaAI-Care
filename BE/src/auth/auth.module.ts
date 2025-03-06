@@ -35,7 +35,7 @@ import { PrismaService } from 'src/prisma.service';
         },
       },
       defaults: {
-        from: `"Friendzii Social Media" <${process.env.EMAIL_USER}>`,
+        from: `"DermaAI Skinning Cancer Prediction Platform" <${process.env.EMAIL_USER}>`,
       },
       template: {
         dir: process.cwd() + '/src/mail/templates',

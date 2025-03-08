@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
-import { UserCircle, Globe } from "lucide-react";
+import { UserCircle, Globe, Calendar, Bell } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,15 +25,25 @@ export const Navbar = () => {
     console.log(`Language changed to: ${code}`);
   };
 
+  // Mock notification count for demo purposes
+  const notificationCount = 3;
+
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b">
       <div className="container flex items-center justify-between h-16">
         <Link to="/" className="text-xl font-bold text-primary">
           DermAI Care
         </Link>
+
         <div className="flex items-center gap-4">
+          <Button variant="ghost" onClick={() => navigate("/")}>
+            Home
+          </Button>
           <Button variant="ghost" onClick={() => navigate("/about")}>
             About
+          </Button>
+          <Button variant="ghost" onClick={() => navigate("/services")}>
+            Services
           </Button>
           <Button variant="ghost" onClick={() => navigate("/doctors")}>
             Doctors
@@ -41,6 +52,60 @@ export const Navbar = () => {
             Contact
           </Button>
 
+          {/* Appointments Button */}
+          <Button variant="ghost" onClick={() => navigate("/appointments")}>
+            <Calendar className="h-5 w-5 mr-2" />
+            Appointments
+          </Button>
+
+          {/* Notifications Button */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="relative">
+                <Bell className="h-5 w-5" />
+                {notificationCount > 0 && (
+                  <Badge className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 bg-red-500">
+                    {notificationCount}
+                  </Badge>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-80">
+              <DropdownMenuItem className="font-bold border-b p-3">
+                Notifications
+              </DropdownMenuItem>
+              <DropdownMenuItem>
+                <div className="flex flex-col py-2">
+                  <span className="font-semibold">Appointment Confirmed</span>
+                  <span className="text-sm text-muted-foreground">
+                    Your appointment with Dr. Smith is confirmed for tomorrow at
+                    2:00 PM
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem>
+                <div className="flex flex-col py-2">
+                  <span className="font-semibold">Payment Successful</span>
+                  <span className="text-sm text-muted-foreground">
+                    Your payment of $150 for the last appointment was successful
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem>
+                <div className="flex flex-col py-2">
+                  <span className="font-semibold">Prescription Ready</span>
+                  <span className="text-sm text-muted-foreground">
+                    Your prescription is ready to be picked up
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="justify-center text-primary">
+                View all notifications
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Language Selector */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon">

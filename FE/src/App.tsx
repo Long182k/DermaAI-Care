@@ -1,4 +1,3 @@
-
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -16,6 +15,9 @@ import Chat from "./pages/Chat";
 import Auth from "./pages/Auth";
 import Privacy from "./pages/Privacy";
 import NotFound from "./pages/NotFound";
+import AppointmentsPage from "./pages/AppointmentsPage";
+import PaymentPage from "./pages/PaymentPage";
+import AnalysisPage from "./pages/AnalysisPage";
 
 const queryClient = new QueryClient();
 
@@ -37,6 +39,9 @@ const App = () => (
           <Route path="/chat" element={<Chat />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/privacy" element={<Privacy />} />
+          <Route path="/appointments" element={<AppointmentsPage />} />
+          <Route path="/payment/:id" element={<PaymentPage />} />
+          <Route path="/analysis" element={<AnalysisPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

@@ -1,14 +1,12 @@
 import {
   Body,
   Controller,
-  Delete,
   Get,
   Param,
   Patch,
+  Query,
   UploadedFile,
   UseInterceptors,
-  Post,
-  Query,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from 'src/auth/@decorator/current-user.decorator';
@@ -31,9 +29,14 @@ export class UsersController {
     return this.usersService.findAll(userId);
   }
 
-  @Get('/userName')
-  findOne(@Param('userName') userName: string) {
-    return this.usersService.findOne(userName);
+  @Get('/email_param/:email')
+  findOne(@Param('email') email: string) {
+    return this.usersService.findOne(email);
+  }
+
+  @Get('/email_query')
+  findOne2(@Query('email') email: string) {
+    return this.usersService.findOne(email);
   }
 
   @Roles(ROLE.ADMIN)

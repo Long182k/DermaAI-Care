@@ -11,12 +11,15 @@ model User {
   id                  String                 @id @default(uuid())
   userName            String                 @unique
   email               String                 @unique
-  role                Role                   @default(USER)
+  role                Role                   @default(PATIENT)
   password            String
   dateOfBirth         DateTime?
+  experience          Int?
+  education           String?
+  certifications      String?
+  languages           Languages?             @default(English)
   hashedPassword      String
   avatarUrl           String?
-  refreshToken        String?
   hashedRefreshToken  String?
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
@@ -32,6 +35,11 @@ model User {
   AIDiagnosisJobs     AIDiagnosisJob[]
   MessageParticipants MessageParticipant[]
   Message             Message[]
+  Schedule            Schedule[]             @relation("DoctorSchedules")
+
+  @@index([email])
+  @@index([userName])
+  @@index([role])
 }
 
 model MessageRoom {
@@ -43,6 +51,8 @@ model MessageRoom {
 
   Messages            Message[]
   MessageParticipants MessageParticipant[]
+
+  @@index([roomType])
 }
 
 model Message {
@@ -53,8 +63,13 @@ model Message {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  Room   MessageRoom @relation(fields: [roomId], references: [id])
-  Sender User        @relation(fields: [senderId], references: [id])
+  Room   MessageRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  Sender User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([roomId])
+  @@index([senderId])
+  @@index([createdAt])
+  @@index([isRead])
 }
 
 model MessageParticipant {
@@ -63,24 +78,50 @@ model MessageParticipant {
   userId   String
   joinedAt DateTime @default(now())
 
-  Room MessageRoom @relation(fields: [roomId], references: [id])
-  User User        @relation(fields: [userId], references: [id])
+  Room MessageRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  User User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([roomId])
+  @@index([userId])
 }
 
-model Appointment {
-  id        String   @id @default(uuid())
-  patientId String
+model Schedule {
+  id        String         @id @default(uuid())
   doctorId  String
   startTime DateTime
   endTime   DateTime
-  status    String
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  status    ScheduleStatus @default(AVAILABLE)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
-  Patient   User       @relation("PatientAppointments", fields: [patientId], references: [id])
-  Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id])
+  Doctor      User         @relation("DoctorSchedules", fields: [doctorId], references: [id], onDelete: Cascade)
+  Appointment Appointment?
+
+  @@index([doctorId])
+  @@index([startTime])
+  @@index([endTime])
+  @@index([status])
+}
+
+model Appointment {
+  id         String   @id @default(uuid())
+  patientId  String
+  doctorId   String
+  status     String
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  scheduleId String   @unique
+
+  Patient   User       @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
+  Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
   Reminders Reminder[]
+  Schedule  Schedule   @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model Reminder {
@@ -89,7 +130,10 @@ model Reminder {
   method        String
   createdAt     DateTime @default(now())
 
-  Appointment Appointment @relation(fields: [appointmentId], references: [id])
+  Appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId])
+  @@index([method])
 }
 
 model MedicalRecordHistory {
@@ -101,7 +145,10 @@ model MedicalRecordHistory {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model Review {
@@ -112,8 +159,13 @@ model Review {
   message   String
   createdAt DateTime @default(now())
 
-  Doctor  User @relation("DoctorReviews", fields: [doctorId], references: [id])
-  Patient User @relation("PatientReviews", fields: [patientId], references: [id])
+  Doctor  User @relation("DoctorReviews", fields: [doctorId], references: [id], onDelete: Cascade)
+  Patient User @relation("PatientReviews", fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([doctorId])
+  @@index([patientId])
+  @@index([rating])
+  @@index([createdAt])
 }
 
 model Payment {
@@ -126,7 +178,12 @@ model Payment {
   transactionId String
   createdAt     DateTime @default(now())
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([transactionId])
+  @@index([createdAt])
 }
 
 model Notification {
@@ -137,7 +194,11 @@ model Notification {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
 }
 
 model AIDiagnosisJob {
@@ -149,7 +210,11 @@ model AIDiagnosisJob {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  User User @relation(fields: [userId], references: [id])
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model MedicalGuidance {
@@ -159,9 +224,28 @@ model MedicalGuidance {
   category    String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([createdAt])
 }
 
 enum Role {
   ADMIN
-  USER
+  DOCTOR
+  PATIENT
+}
+
+enum ScheduleStatus {
+  AVAILABLE
+  UNAVAILABLE
+  BOOKED
+  CANCELLED
+}
+
+enum Languages {
+  English
+  Spanish
+  French
+  Japanese
+  Vietnamese
 }

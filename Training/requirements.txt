@@ -1,0 +1,10 @@
+tensorflow>=2.16.1
+flask>=2.2.2
+numpy>=1.23.5
+Pillow>=9.5.0  # For image processing
+flask-limiter>=3.3.0  # For rate limiting
+scikit-learn>=1.2.2  # For metrics
+seaborn>=0.12.2  # For visualization
+matplotlib>=3.7.1
+pandas>=2.0.0  # For handling CSV data
+mlflow>=2.10.0  # For experiment tracking 

@@ -17,7 +17,7 @@ def build_model(num_classes):
         base_model = InceptionResNetV2(
             weights='imagenet',
             include_top=False,
-            input_shape=(224, 224, 3),
+            input_shape=(299, 299, 3),
             pooling='avg'  # Use average pooling to handle dimensions consistently
         )
         
@@ -25,7 +25,7 @@ def build_model(num_classes):
         base_model.trainable = False
         
         # Build the model using Functional API with proper dimension handling
-        inputs = tf.keras.Input(shape=(224, 224, 3))
+        inputs = tf.keras.Input(shape=(299, 299, 3))
         x = base_model(inputs, training=False)
         # Remove the separate GlobalAveragePooling2D since we use pooling='avg' in base_model
         x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
@@ -78,7 +78,7 @@ def train_model(model, train_generator, val_generator, epochs, early_stopping_pa
             patience=early_stopping_patience,
             restore_best_weights=True,
             mode='max',
-            min_delta=0.01  # Minimum change to qualify as an improvement
+            min_delta=0.01
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_accuracy',
@@ -89,7 +89,7 @@ def train_model(model, train_generator, val_generator, epochs, early_stopping_pa
             verbose=1
         ),
         tf.keras.callbacks.ModelCheckpoint(
-            'models/checkpoint.h5',
+            'models/best_model.h5',  # Save the best model
             monitor='val_accuracy',
             save_best_only=True,
             mode='max'
@@ -159,11 +159,11 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
             base_model = InceptionResNetV2(
                 weights='imagenet',
                 include_top=False,
-                input_shape=(224, 224, 3),
+                input_shape=(299, 299, 3),
                 pooling='avg'
             )
             
-            inputs = tf.keras.Input(shape=(224, 224, 3))
+            inputs = tf.keras.Input(shape=(299, 299, 3))
             x = base_model(inputs, training=True)
             x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
             x = Dropout(0.5)(x)

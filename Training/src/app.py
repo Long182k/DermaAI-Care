@@ -37,7 +37,7 @@ def create_model_architecture(num_classes=6):  # Adjust num_classes to match sav
     base_model = InceptionResNetV2(
         weights='imagenet',
         include_top=False,
-        input_shape=(224, 224, 3),
+        input_shape=(299, 299, 3),
         pooling='avg'
     )
     
@@ -45,7 +45,7 @@ def create_model_architecture(num_classes=6):  # Adjust num_classes to match sav
     base_model.trainable = False
     
     # Build the model using Functional API
-    inputs = Input(shape=(224, 224, 3))
+    inputs = Input(shape=(299, 299, 3))
     x = base_model(inputs, training=False)
     x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
     x = Dropout(0.5)(x)
@@ -93,7 +93,7 @@ def preprocess_image(image_path):
     Preprocess single image according to InceptionResNetV2 requirements
     """
     # Load image in target size (224x224)
-    img = load_img(image_path, target_size=(224, 224))
+    img = load_img(image_path, target_size=(299, 299))
     
     # Convert to array
     img_array = img_to_array(img)

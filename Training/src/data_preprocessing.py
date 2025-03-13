@@ -12,8 +12,8 @@ def preprocess_image(image_path):
     """
     Preprocess single image according to InceptionResNetV2 requirements
     """
-    # Load image in target size (224x224)
-    img = load_img(image_path, target_size=(224, 224))
+    # Load image in target size (299x299)
+    img = load_img(image_path, target_size=(299, 299))
     
     # Convert to array
     img_array = img_to_array(img)
@@ -33,6 +33,9 @@ def create_augmentation_pipeline():
         tf.keras.layers.RandomFlip("horizontal"),
         tf.keras.layers.RandomBrightness(0.2),
         tf.keras.layers.RandomContrast(0.2),
+        tf.keras.layers.RandomTranslation(0.1, 0.1),  # Added translation
+        tf.keras.layers.RandomHeight(0.1),  # Added random height
+        tf.keras.layers.RandomWidth(0.1)  # Added random width
     ])
 
 def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=5):
@@ -125,16 +128,16 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
     def __getitem__(self, idx):
         batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
         
-        batch_x = np.zeros((len(batch_indices), 224, 224, 3))
+        batch_x = np.zeros((len(batch_indices), 299, 299, 3))
         batch_y = np.zeros((len(batch_indices), self.n_classes))
         
         for i, idx in enumerate(batch_indices):
             # Load and resize image to 224x224
-            img = load_img(self.image_paths[idx], target_size=(224, 224))
+            img = load_img(self.image_paths[idx], target_size=(299, 299))
             img_array = img_to_array(img)
             
             # Ensure image is resized to 224x224
-            img_array = tf.image.resize(img_array, [224, 224])
+            img_array = tf.image.resize(img_array, [299, 299])
             
             if self.is_training and self.augmentation:
                 img_array = self.augmentation(img_array)
@@ -238,4 +241,4 @@ if __name__ == "__main__":
         CSV_PATH,
         IMAGE_DIR,
         fold_idx=0
-    ) 
+    )

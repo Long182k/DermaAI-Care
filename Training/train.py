@@ -13,6 +13,9 @@ if __name__ == '__main__':
     # Must be called before any other multiprocessing code
     mp.set_start_method('spawn', force=True)
 
+# Enable mixed precision
+tf.keras.mixed_precision.set_global_policy('mixed_float16')
+
 def setup_gpu():
     try:
         # Reset GPU devices
@@ -80,7 +83,7 @@ def main():
             IMAGE_DIR,
             batch_size=24,
             min_samples_per_class=10,
-            n_folds=5,
+            n_folds=10,  # Increased from 5 to 10
             fold_idx=0
         )
         
@@ -95,8 +98,7 @@ def main():
                 model, 
                 train_gen, 
                 val_gen,
-                epochs=15,
-                # class_weights=dataset_stats['class_weights'],
+                epochs=20,  # Increased from 15
                 early_stopping_patience=3,
                 reduce_lr_patience=3,
                 class_weights=None
@@ -134,7 +136,7 @@ def main():
             model,
             train_gen,
             val_gen,
-            epochs=10,
+            epochs=15,  # Increased from 10
             early_stopping_patience=4
         )
         
@@ -153,4 +155,4 @@ def main():
         raise
 
 if __name__ == "__main__":
-    main() 
+    main()

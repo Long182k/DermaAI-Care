@@ -1,9 +1,15 @@
-from sklearn.metrics import classification_report, confusion_matrix
-import seaborn as sns
-import matplotlib.pyplot as plt
-import tensorflow as tf
 import numpy as np
-import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import (
+    classification_report, 
+    confusion_matrix,
+    accuracy_score,
+    roc_auc_score,
+    f1_score,
+    precision_score, 
+    recall_score
+)
 
 def evaluate_model(model, val_generator):
     """
@@ -33,50 +39,69 @@ def evaluate_model(model, val_generator):
     plt.savefig('models/confusion_matrix.png')  # Save the plot to a file
     plt.close()  # Close the plot to free up resources
     
-    # Calculate and print metrics
-    loss, accuracy, auc, precision, recall = model.evaluate(val_generator)
+    # Calculate metrics
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred, average='weighted')
+    recall = recall_score(y_true, y_pred, average='weighted')
+    f1 = f1_score(y_true, y_pred, average='weighted')
+    
+    # For AUC, we need to binarize the output (one-vs-rest approach)
+    n_classes = len(np.unique(y_true))
+    y_true_bin = np.eye(n_classes)[y_true]
+    
+    # Calculate AUC if possible (requires probabilities)
+    try:
+        auc = roc_auc_score(y_true_bin, predictions, multi_class='ovr', average='weighted')
+    except Exception as e:
+        print(f"Warning: Could not calculate AUC: {e}")
+        auc = 0
+    
+    # Calculate sensitivity (same as recall) and specificity
+    # For multiclass, we calculate macro average
+    sensitivity = recall
+    
+    # Calculate specificity (true negative rate)
+    # For multiclass, we use a one-vs-rest approach
+    specificities = []
+    for i in range(n_classes):
+        true_neg = np.sum((y_true != i) & (y_pred != i))
+        actual_neg = np.sum(y_true != i)
+        specificities.append(true_neg / actual_neg if actual_neg > 0 else 0)
+    specificity = np.mean(specificities)
+    
+    # Calculate ICBHI score (average of sensitivity and specificity)
+    icbhi_score = (sensitivity + specificity) / 2
+    
+    # Print metrics
     print(f"\nValidation Accuracy: {accuracy*100:.2f}%")
-    print(f"Validation Loss: {loss:.4f}")
+    print(f"Validation Precision: {precision*100:.2f}%")
+    print(f"Validation Recall/Sensitivity: {sensitivity*100:.2f}%")
+    print(f"Validation F1 Score: {f1*100:.2f}%")
+    print(f"Validation AUC: {auc*100:.2f}%")
+    print(f"Validation Specificity: {specificity*100:.2f}%")
+    print(f"Validation ICBHI Score: {icbhi_score*100:.2f}%")
     
     # Return metrics for cross-validation
     metrics = {
-        'loss': loss,
         'accuracy': accuracy,
-        'auc': auc,
         'precision': precision,
         'recall': recall,
-        'f1_score': report['weighted avg']['f1-score']
+        'sensitivity': sensitivity,
+        'f1': f1,
+        'auc': auc,
+        'specificity': specificity,
+        'icbhi_score': icbhi_score
     }
     
     return metrics
 
-def save_model(model, filepath):
+
+def save_model(model, save_path):
     """
-    Save the trained model with custom objects
+    Save the trained model to disk
     """
     try:
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Save the model with custom objects
-        model.save(filepath, save_format='h5')
-        print(f"\nModel successfully saved to: {filepath}")
-        
-        # Save model summary
-        summary_path = os.path.join(os.path.dirname(filepath), 'model_summary.txt')
-        with open(summary_path, 'w') as f:
-            model.summary(print_fn=lambda x: f.write(x + '\n'))
-        print(f"Model summary saved to: {summary_path}")
-        
-        # Save model architecture visualization
-        try:
-            from tensorflow.keras.utils import plot_model
-            arch_path = os.path.join(os.path.dirname(filepath), 'model_architecture.png')
-            plot_model(model, to_file=arch_path, show_shapes=True, show_layer_names=True)
-            print(f"Model architecture visualization saved to: {arch_path}")
-        except Exception as viz_error:
-            print(f"Warning: Could not save model visualization: {viz_error}")
-        
+        model.save(save_path)
+        print(f"Model successfully saved to {save_path}")
     except Exception as e:
-        print(f"Error saving model: {str(e)}")
-        raise 
+        print(f"Error saving model: {e}")

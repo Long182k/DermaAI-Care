@@ -16,6 +16,7 @@
 # Training specific ignores
 /Training/data/
 /Training/venv/
+/Training/linux_env/
 /Training/__pycache__/
 /Training/*.pyc
 /Training/*.pyo

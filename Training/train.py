@@ -80,7 +80,7 @@ def main():
         dataset_stats = analyze_dataset(CSV_PATH)
         
         # Number of folds for cross-validation
-        n_folds = 10
+        n_folds = 5
         
         # Store metrics for each fold
         all_metrics = {

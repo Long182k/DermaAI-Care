@@ -125,8 +125,7 @@ def main():
                     train_gen, 
                     val_gen,
                     epochs=2,
-                    batch_size=24,  # Add batch_size here
-                    # class_weights=dataset_stats['class_weights'],
+                    batch_size=24,  # Pass batch_size here
                     early_stopping_patience=3,
                     reduce_lr_patience=3,
                     class_weights=None

@@ -73,7 +73,7 @@ def train_model(model, train_generator, val_generator, epochs, batch_size, early
         mlflow.end_run()
 
     # Start a new MLflow run
-    with mlflow.start_run(nested=True):  # Set nested=True to allow nested runs
+    with mlflow.start_run(nested=True):  # Ensure nested=True for nested runs
         # Log batch size using mlflow
         mlflow.log_param("batch_size", batch_size)
         
@@ -103,49 +103,49 @@ def train_model(model, train_generator, val_generator, epochs, batch_size, early
             tf.keras.callbacks.TerminateOnNaN()
         ]
         
-        with mlflow.start_run():
-            mlflow.log_param("epochs", epochs)
-            mlflow.log_param("batch_size", train_generator.batch_size)
-            
-            if hasattr(model.optimizer, 'learning_rate'):
-                if hasattr(model.optimizer.learning_rate, 'initial_learning_rate'):
-                    initial_lr = model.optimizer.learning_rate.initial_learning_rate
-                else:
-                    initial_lr = float(model.optimizer.learning_rate)
+        # Remove the second mlflow.start_run() block
+        mlflow.log_param("epochs", epochs)
+        mlflow.log_param("batch_size", batch_size)
+        
+        if hasattr(model.optimizer, 'learning_rate'):
+            if hasattr(model.optimizer.learning_rate, 'initial_learning_rate'):
+                initial_lr = model.optimizer.learning_rate.initial_learning_rate
             else:
-                initial_lr = float(model.optimizer._learning_rate)
-                
-            mlflow.log_param("initial_learning_rate", initial_lr)
+                initial_lr = float(model.optimizer.learning_rate)
+        else:
+            initial_lr = float(model.optimizer._learning_rate)
             
-            # Use mixed precision for faster training
-            tf.keras.mixed_precision.set_global_policy('mixed_float16')
-            
-            # Configure training to be thread-safe and optimize for performance
-            options = tf.data.Options()
-            options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
-            options.experimental_optimization.parallel_batch = True
-            
-            history = model.fit(
-                train_generator,
-                validation_data=val_generator,
-                epochs=epochs,
-                callbacks=callbacks,
-                class_weight=class_weights
-            )
-            
-            # Log metrics
-            mlflow.log_metrics({
-                "final_accuracy": history.history['accuracy'][-1],
-                "final_val_accuracy": history.history['val_accuracy'][-1],
-                "final_auc": history.history['auc'][-1],
-                "final_val_auc": history.history['val_auc'][-1],
-                "final_precision": history.history['precision'][-1],
-                "final_val_precision": history.history['val_precision'][-1],
-                "final_recall": history.history['recall'][-1],
-                "final_val_recall": history.history['val_recall'][-1]
-            })
-            
-        return history
+        mlflow.log_param("initial_learning_rate", initial_lr)
+        
+        # Use mixed precision for faster training
+        tf.keras.mixed_precision.set_global_policy('mixed_float16')
+        
+        # Configure training to be thread-safe and optimize for performance
+        options = tf.data.Options()
+        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
+        options.experimental_optimization.parallel_batch = True
+        
+        history = model.fit(
+            train_generator,
+            validation_data=val_generator,
+            epochs=epochs,
+            callbacks=callbacks,
+            class_weight=class_weights
+        )
+        
+        # Log metrics
+        mlflow.log_metrics({
+            "final_accuracy": history.history['accuracy'][-1],
+            "final_val_accuracy": history.history['val_accuracy'][-1],
+            "final_auc": history.history['auc'][-1],
+            "final_val_auc": history.history['val_auc'][-1],
+            "final_precision": history.history['precision'][-1],
+            "final_val_precision": history.history['val_precision'][-1],
+            "final_recall": history.history['recall'][-1],
+            "final_val_recall": history.history['val_recall'][-1]
+        })
+        
+    return history
 
 def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience):
     """

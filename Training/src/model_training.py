@@ -9,23 +9,19 @@ from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
 strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
 
 def build_model(num_classes):
-    """
-    Build and compile the model with memory optimizations
-    """
     with strategy.scope():
-        # Load the pre-trained InceptionResNetV2 model with smaller input size
         base_model = InceptionResNetV2(
             weights='imagenet',
             include_top=False,
-            input_shape=(224, 224, 3),
-            pooling='avg'  # Use average pooling to handle dimensions consistently
+            input_shape=(299, 299, 3),
+            pooling='avg'
         )
         
         # Freeze all layers initially
         base_model.trainable = False
         
         # Build the model using Functional API with proper dimension handling
-        inputs = tf.keras.Input(shape=(224, 224, 3))
+        inputs = tf.keras.Input(shape=(299, 299, 3))
         x = base_model(inputs, training=False)
         # Remove the separate GlobalAveragePooling2D since we use pooling='avg' in base_model
         x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
@@ -68,79 +64,88 @@ def cross_validate_model(model, data, labels, k=5):
         )
         scores.append(history.history['val_accuracy'][-1]) 
 
-def train_model(model, train_generator, val_generator, epochs, early_stopping_patience, reduce_lr_patience, class_weights=None):
+def train_model(model, train_generator, val_generator, epochs, batch_size, early_stopping_patience, reduce_lr_patience, class_weights=None):
     """
     Enhanced training function with proper distribution strategy and early stopping
     """
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            monitor='val_accuracy',
-            patience=early_stopping_patience,
-            restore_best_weights=True,
-            mode='max',
-            min_delta=0.01  # Minimum change to qualify as an improvement
-        ),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_accuracy',
-            factor=0.2,
-            patience=reduce_lr_patience,
-            min_lr=1e-6,
-            mode='max',
-            verbose=1
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            'models/checkpoint.h5',
-            monitor='val_accuracy',
-            save_best_only=True,
-            mode='max'
-        ),
-        tf.keras.callbacks.BackupAndRestore(backup_dir='./backup'),
-        tf.keras.callbacks.TerminateOnNaN()
-    ]
-    
-    with mlflow.start_run():
-        mlflow.log_param("epochs", epochs)
-        mlflow.log_param("batch_size", train_generator.batch_size)
+    # End any active MLflow run
+    if mlflow.active_run():
+        mlflow.end_run()
+
+    # Start a new MLflow run
+    with mlflow.start_run(nested=True):  # Set nested=True to allow nested runs
+        # Log batch size using mlflow
+        mlflow.log_param("batch_size", batch_size)
         
-        if hasattr(model.optimizer, 'learning_rate'):
-            if hasattr(model.optimizer.learning_rate, 'initial_learning_rate'):
-                initial_lr = model.optimizer.learning_rate.initial_learning_rate
-            else:
-                initial_lr = float(model.optimizer.learning_rate)
-        else:
-            initial_lr = float(model.optimizer._learning_rate)
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_accuracy',
+                patience=early_stopping_patience,
+                restore_best_weights=True,
+                mode='max',
+                min_delta=0.01  # Minimum change to qualify as an improvement
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_accuracy',
+                factor=0.2,
+                patience=reduce_lr_patience,
+                min_lr=1e-6,
+                mode='max',
+                verbose=1
+            ),
+            tf.keras.callbacks.ModelCheckpoint(
+                '/kaggle/working/models/checkpoint.keras',
+                monitor='val_accuracy',
+                save_best_only=True,
+                mode='max'
+            ),
+            tf.keras.callbacks.BackupAndRestore(backup_dir='./backup'),
+            tf.keras.callbacks.TerminateOnNaN()
+        ]
+        
+        with mlflow.start_run():
+            mlflow.log_param("epochs", epochs)
+            mlflow.log_param("batch_size", train_generator.batch_size)
             
-        mlflow.log_param("initial_learning_rate", initial_lr)
-        
-        # Use mixed precision for faster training
-        tf.keras.mixed_precision.set_global_policy('mixed_float16')
-        
-        # Configure training to be thread-safe and optimize for performance
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
-        options.experimental_optimization.parallel_batch = True
-        
-        history = model.fit(
-            train_generator,
-            validation_data=val_generator,
-            epochs=epochs,
-            callbacks=callbacks,
-            class_weight=class_weights
-        )
-        
-        # Log metrics
-        mlflow.log_metrics({
-            "final_accuracy": history.history['accuracy'][-1],
-            "final_val_accuracy": history.history['val_accuracy'][-1],
-            "final_auc": history.history['auc'][-1],
-            "final_val_auc": history.history['val_auc'][-1],
-            "final_precision": history.history['precision'][-1],
-            "final_val_precision": history.history['val_precision'][-1],
-            "final_recall": history.history['recall'][-1],
-            "final_val_recall": history.history['val_recall'][-1]
-        })
-        
-    return history
+            if hasattr(model.optimizer, 'learning_rate'):
+                if hasattr(model.optimizer.learning_rate, 'initial_learning_rate'):
+                    initial_lr = model.optimizer.learning_rate.initial_learning_rate
+                else:
+                    initial_lr = float(model.optimizer.learning_rate)
+            else:
+                initial_lr = float(model.optimizer._learning_rate)
+                
+            mlflow.log_param("initial_learning_rate", initial_lr)
+            
+            # Use mixed precision for faster training
+            tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            
+            # Configure training to be thread-safe and optimize for performance
+            options = tf.data.Options()
+            options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
+            options.experimental_optimization.parallel_batch = True
+            
+            history = model.fit(
+                train_generator,
+                validation_data=val_generator,
+                epochs=epochs,
+                callbacks=callbacks,
+                class_weight=class_weights
+            )
+            
+            # Log metrics
+            mlflow.log_metrics({
+                "final_accuracy": history.history['accuracy'][-1],
+                "final_val_accuracy": history.history['val_accuracy'][-1],
+                "final_auc": history.history['auc'][-1],
+                "final_val_auc": history.history['val_auc'][-1],
+                "final_precision": history.history['precision'][-1],
+                "final_val_precision": history.history['val_precision'][-1],
+                "final_recall": history.history['recall'][-1],
+                "final_val_recall": history.history['val_recall'][-1]
+            })
+            
+        return history
 
 def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience):
     """
@@ -159,11 +164,11 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
             base_model = InceptionResNetV2(
                 weights='imagenet',
                 include_top=False,
-                input_shape=(224, 224, 3),
+                input_shape=(299, 299, 3),
                 pooling='avg'
             )
             
-            inputs = tf.keras.Input(shape=(224, 224, 3))
+            inputs = tf.keras.Input(shape=(299, 299, 3))
             x = base_model(inputs, training=True)
             x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
             x = Dropout(0.5)(x)

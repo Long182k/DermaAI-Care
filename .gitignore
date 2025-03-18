@@ -140,6 +140,7 @@ Thumbs.db
 # Model files and directories
 models/
 *.h5
+*.keras
 *.hdf5
 *.pth
 *.ckpt

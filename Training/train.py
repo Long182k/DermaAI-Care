@@ -66,10 +66,10 @@ def main():
     setup_gpu()
     
     # Define paths
-    CSV_PATH = "data/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "data/train"
-    MODEL_SAVE_PATH = "models/skinning_cancer_prediction_model.h5"
-    CHECKPOINT_PATH = "models/checkpoint.h5"  # Path to load pre-trained model
+    CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
+    IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
+    MODEL_SAVE_PATH = "/kaggle/working/models/skinning_cancer_prediction_model.h5"
+    CHECKPOINT_PATH = "/kaggle/working/models/checkpoint.keras"  # Path to load pre-trained model
     
     # Create models directory if it doesn't exist
     os.makedirs("models", exist_ok=True)
@@ -77,10 +77,10 @@ def main():
     try:
         # Analyze dataset
         print("Analyzing dataset...")
-        dataset_stats = analyze_dataset(CSV_PATH)
+        dataset_stats = analyze_dataset("/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv")
         
         # Number of folds for cross-validation
-        n_folds = 10
+        n_folds = 5
         
         # Store metrics for each fold
         all_metrics = {
@@ -125,12 +125,13 @@ def main():
                     train_gen, 
                     val_gen,
                     epochs=2,
+                    batch_size=24,  # Add batch_size here
                     # class_weights=dataset_stats['class_weights'],
                     early_stopping_patience=3,
                     reduce_lr_patience=3,
                     class_weights=None
                 )
-            else:
+            else:                
                 # Load pre-trained model for Phase 2
                 print("Loading pre-trained model for Phase 2...")
                 # Define custom objects dictionary
@@ -199,3 +200,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    tf.keras.mixed_precision.set_global_policy('mixed_float16')

@@ -13,7 +13,7 @@ def preprocess_image(image_path):
     Preprocess single image according to InceptionResNetV2 requirements
     """
     # Load image in target size (224x224)
-    img = load_img(image_path, target_size=(224, 224))
+    img = load_img(image_path, target_size=(299, 299))
     
     # Convert to array
     img_array = img_to_array(img)
@@ -40,7 +40,7 @@ def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=
     Load and prepare data from ISIC 2020 dataset using k-fold cross validation
     """
     # Read the CSV file
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv("/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv")
     
     # Create full image paths
     df['image_path'] = df['image_name'].apply(lambda x: os.path.join(image_dir, x + '.jpg'))
@@ -125,16 +125,16 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
     def __getitem__(self, idx):
         batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
         
-        batch_x = np.zeros((len(batch_indices), 224, 224, 3))
+        batch_x = np.zeros((len(batch_indices), 299, 299, 3))
         batch_y = np.zeros((len(batch_indices), self.n_classes))
         
         for i, idx in enumerate(batch_indices):
             # Load and resize image to 224x224
-            img = load_img(self.image_paths[idx], target_size=(224, 224))
+            img = load_img(self.image_paths[idx], target_size=(299, 299))
             img_array = img_to_array(img)
             
             # Ensure image is resized to 224x224
-            img_array = tf.image.resize(img_array, [224, 224])
+            img_array = tf.image.resize(img_array, [299, 299])
             
             if self.is_training and self.augmentation:
                 img_array = self.augmentation(img_array)
@@ -149,10 +149,7 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
         
         return batch_x, batch_y
 
-def create_generators(csv_path, image_dir, batch_size, min_samples_per_class, n_folds,fold_idx):
-    """
-    Create train and validation generators for a specific fold
-    """
+def create_generators(csv_path, image_dir, batch_size, min_samples_per_class, n_folds, fold_idx):
     df, fold_indices, diagnosis_to_idx = load_and_prepare_data(
         csv_path, 
         image_dir,
@@ -169,20 +166,9 @@ def create_generators(csv_path, image_dir, batch_size, min_samples_per_class, n_
     train_df = df.iloc[train_idx]
     val_df = df.iloc[val_idx]
     
-    # Create generators with smaller batch size
-    train_generator = ISICDataGenerator(
-        train_df,
-        diagnosis_to_idx,
-        batch_size=batch_size,
-        is_training=True
-    )
-    
-    val_generator = ISICDataGenerator(
-        val_df,
-        diagnosis_to_idx,
-        batch_size=batch_size,
-        is_training=False
-    )
+    # Use create_data_pipeline with diagnosis_to_idx
+    train_generator = create_data_pipeline(train_df, diagnosis_to_idx, batch_size=batch_size, is_training=True)
+    val_generator = create_data_pipeline(val_df, diagnosis_to_idx, batch_size=batch_size, is_training=False)
     
     n_classes = len(diagnosis_to_idx)
     return train_generator, val_generator, diagnosis_to_idx, n_classes, len(fold_indices)
@@ -225,8 +211,8 @@ def analyze_dataset(csv_path):
 
 # Usage example:
 if __name__ == "__main__":
-    CSV_PATH = "data/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "data/train"
+    CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
+    IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
     
     # Analyze dataset
     dataset_stats = analyze_dataset(CSV_PATH)
@@ -238,4 +224,34 @@ if __name__ == "__main__":
         CSV_PATH,
         IMAGE_DIR,
         fold_idx=0
-    ) 
+    )
+
+
+def create_data_pipeline(df, diagnosis_to_idx, batch_size, is_training=True):
+    def load_and_preprocess_image(image_path, diagnosis):
+        img = tf.io.read_file(image_path)
+        img = tf.image.decode_jpeg(img, channels=3)
+        img = tf.image.resize(img, [299, 299])
+        img = preprocess_input(img)
+        
+        # Convert diagnosis to index using tf.py_function
+        label = tf.py_function(
+            func=lambda d: diagnosis_to_idx[d.numpy().decode('utf-8')],
+            inp=[diagnosis],
+            Tout=tf.int32
+        )
+        
+        # Ensure label has a known shape
+        label.set_shape([])  # Set shape to scalar
+        
+        label = tf.keras.utils.to_categorical(label, num_classes=len(diagnosis_to_idx))
+        
+        return img, label
+
+    dataset = tf.data.Dataset.from_tensor_slices((df['image_path'].values, df['diagnosis'].values))
+    if is_training:
+        dataset = dataset.shuffle(buffer_size=len(df))
+    dataset = dataset.map(load_and_preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
+    dataset = dataset.batch(batch_size)
+    dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+    return dataset

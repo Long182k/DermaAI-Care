@@ -11,7 +11,7 @@ from sklearn.metrics import (
     recall_score
 )
 
-def evaluate_model(model, val_generator):
+def evaluate_model(model, val_generator, fold_number):
     """
     Evaluate the model and display results
     Returns a dictionary of metrics for cross-validation analysis
@@ -33,10 +33,13 @@ def evaluate_model(model, val_generator):
     plt.figure(figsize=(10, 8))
     cm = confusion_matrix(y_true, y_pred)
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title('Confusion Matrix')
+    plt.title(f'Confusion Matrix - Fold {fold_number}')
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
-    plt.savefig('models/confusion_matrix.png')  # Save the plot to a file
+    plt.savefig(f'models/confusion_matrix_fold_{fold_number}.png')  # Save the plot to a file
+    
+    # Display the confusion matrix
+    plt.show()  # Show the plot on the screen
     plt.close()  # Close the plot to free up resources
     
     # Calculate metrics
@@ -57,11 +60,9 @@ def evaluate_model(model, val_generator):
         auc = 0
     
     # Calculate sensitivity (same as recall) and specificity
-    # For multiclass, we calculate macro average
     sensitivity = recall
     
     # Calculate specificity (true negative rate)
-    # For multiclass, we use a one-vs-rest approach
     specificities = []
     for i in range(n_classes):
         true_neg = np.sum((y_true != i) & (y_pred != i))

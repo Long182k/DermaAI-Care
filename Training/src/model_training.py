@@ -89,7 +89,7 @@ def train_model(model, train_generator, val_generator, epochs, early_stopping_pa
             verbose=1
         ),
         tf.keras.callbacks.ModelCheckpoint(
-            'models/checkpoint.h5',
+            '/kaggle/working/models/checkpoint.keras',
             monitor='val_accuracy',
             save_best_only=True,
             mode='max'

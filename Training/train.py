@@ -66,10 +66,10 @@ def main():
     setup_gpu()
     
     # Define paths
-    CSV_PATH = "data/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "data/train"
-    MODEL_SAVE_PATH = "models/skinning_cancer_prediction_model.h5"
-    CHECKPOINT_PATH = "models/checkpoint.h5"  # Path to load pre-trained model
+    CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
+    IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
+    MODEL_SAVE_PATH = "/kaggle/working/models/skinning_cancer_prediction_model.keras"
+    CHECKPOINT_PATH = "/kaggle/working/models/checkpoint.keras"  # Path to load pre-trained model
     
     # Create models directory if it doesn't exist
     os.makedirs("models", exist_ok=True)
@@ -172,7 +172,7 @@ def main():
                 all_metrics[metric].append(value)
             
             # Save model for this fold
-            fold_model_path = f"models/fold_{fold_idx+1}_model.h5"
+            fold_model_path = f"models/fold_{fold_idx+1}_model.keras"
             save_model(model, fold_model_path)
             print(f"Model for fold {fold_idx+1} saved to {fold_model_path}")
         

@@ -22,7 +22,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Load the trained model
-MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models/skinning_cancer_prediction_model.h5')
+MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '/kaggle/working/models/skinning_cancer_prediction_model.keras')
 
 # Define custom objects dictionary for model loading
 custom_objects = {

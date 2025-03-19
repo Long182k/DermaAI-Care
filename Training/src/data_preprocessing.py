@@ -225,8 +225,13 @@ def analyze_dataset(csv_path):
 
 # Usage example:
 if __name__ == "__main__":
-    CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
+    # CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
+    # IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
+
+    # Define local paths
+    CSV_PATH = "data/ISIC_2020_Training_GroundTruth_v2.csv"
+    IMAGE_DIR = "data/train"
+    
     
     # Analyze dataset
     dataset_stats = analyze_dataset(CSV_PATH)

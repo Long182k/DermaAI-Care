@@ -1,20 +1,23 @@
 from sklearn.model_selection import KFold
 import mlflow
 import tensorflow as tf
-from tensorflow.keras.applications import InceptionResNetV2
+from tensorflow.keras.applications import EfficientNetB1  # Import EfficientNetB1 (or EfficientNetB2)
+from tensorflow.keras.applications.efficientnet import preprocess_input  # EfficientNet preprocessing
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
 
 # Define strategy at module level so it can be imported
 strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
 
+from tensorflow.keras.applications import EfficientNetB1  # Import EfficientNetB1
+
 def build_model(num_classes):
     """
     Build and compile the model with memory optimizations
     """
     with strategy.scope():
-        # Load the pre-trained InceptionResNetV2 model with smaller input size
-        base_model = InceptionResNetV2(
+        # Load the pre-trained EfficientNetB1 model
+        base_model = EfficientNetB1(
             weights='imagenet',
             include_top=False,
             input_shape=(224, 224, 3),
@@ -27,7 +30,6 @@ def build_model(num_classes):
         # Build the model using Functional API with proper dimension handling
         inputs = tf.keras.Input(shape=(224, 224, 3))
         x = base_model(inputs, training=False)
-        # Remove the separate GlobalAveragePooling2D since we use pooling='avg' in base_model
         x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
         x = Dropout(0.5)(x)
         outputs = Dense(num_classes, activation='softmax', kernel_initializer='he_normal')(x)
@@ -89,7 +91,7 @@ def train_model(model, train_generator, val_generator, epochs, early_stopping_pa
             verbose=1
         ),
         tf.keras.callbacks.ModelCheckpoint(
-            '/kaggle/working/models/checkpoint.keras',
+            'models/checkpoint.keras',
             monitor='val_accuracy',
             save_best_only=True,
             mode='max'
@@ -156,7 +158,7 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
             weights = model.get_weights()
             
             # Recreate the model architecture consistently with build_model
-            base_model = InceptionResNetV2(
+            base_model = EfficientNetB1(
                 weights='imagenet',
                 include_top=False,
                 input_shape=(224, 224, 3),

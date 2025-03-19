@@ -7,10 +7,11 @@ from PIL import Image
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.utils.class_weight import compute_class_weight
+from tensorflow.keras.applications.efficientnet import preprocess_input  # EfficientNet preprocessing
 
 def preprocess_image(image_path):
     """
-    Preprocess single image according to InceptionResNetV2 requirements
+    Preprocess single image according to EfficientNet requirements
     """
     # Load image in target size (224x224)
     img = load_img(image_path, target_size=(224, 224))
@@ -21,7 +22,7 @@ def preprocess_image(image_path):
     # Expand dimensions for batch processing
     img_array = np.expand_dims(img_array, axis=0)
     
-    # Apply InceptionResNetV2 preprocessing
+    # Apply EfficientNet preprocessing
     processed_img = preprocess_input(img_array)
     
     return processed_img
@@ -33,6 +34,12 @@ def create_augmentation_pipeline():
         tf.keras.layers.RandomFlip("horizontal"),
         tf.keras.layers.RandomBrightness(0.2),
         tf.keras.layers.RandomContrast(0.2),
+        # New augmentations
+        tf.keras.layers.RandomTranslation(0.1, 0.1),  # Add random translation
+        tf.keras.layers.RandomShear(0.2),  # Add random shear
+        # Consider adding color jitter if applicable
+        # tf.keras.layers.RandomHue(0.1),
+        # tf.keras.layers.RandomSaturation(0.1),
     ])
 
 def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=5):
@@ -225,8 +232,8 @@ def analyze_dataset(csv_path):
 
 # Usage example:
 if __name__ == "__main__":
-    CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
+    CSV_PATH = "data/ISIC_2020_Training_GroundTruth_v2.csv"
+    IMAGE_DIR = "data/train"
     
     # Analyze dataset
     dataset_stats = analyze_dataset(CSV_PATH)
@@ -238,4 +245,4 @@ if __name__ == "__main__":
         CSV_PATH,
         IMAGE_DIR,
         fold_idx=0
-    ) 
+    )

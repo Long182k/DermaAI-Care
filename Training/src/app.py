@@ -5,7 +5,7 @@ import os
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
-from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input, InceptionResNetV2
+from tensorflow.keras.applications.efficientnet import EfficientNetB1,preprocess_input  # Import EfficientNetB1
 from tensorflow.keras.layers import Dense, Dropout, Input
 
 # Import custom layer with correct relative import
@@ -22,7 +22,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Load the trained model
-MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '/kaggle/working/models/skinning_cancer_prediction_model.keras')
+MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models/skinning_cancer_prediction_model.keras')
 
 # Define custom objects dictionary for model loading
 custom_objects = {
@@ -34,7 +34,7 @@ def create_model_architecture(num_classes=6):  # Adjust num_classes to match sav
     tf.keras.backend.clear_session()
     
     # Create the base model with the same architecture as in training
-    base_model = InceptionResNetV2(
+    base_model = EfficientNetB1(
         weights='imagenet',
         include_top=False,
         input_shape=(224, 224, 3),
@@ -90,7 +90,7 @@ except Exception as e:
 
 def preprocess_image(image_path):
     """
-    Preprocess single image according to InceptionResNetV2 requirements
+    Preprocess single image according to EfficientNetB1 requirements
     """
     # Load image in target size (224x224)
     img = load_img(image_path, target_size=(224, 224))
@@ -101,7 +101,7 @@ def preprocess_image(image_path):
     # Expand dimensions for batch processing
     img_array = np.expand_dims(img_array, axis=0)
     
-    # Apply InceptionResNetV2 preprocessing
+    # Apply EfficientNetB1 preprocessing
     processed_img = preprocess_input(img_array)
     
     return processed_img

@@ -65,11 +65,17 @@ def main():
     # Setup GPU first
     setup_gpu()
     
-    # Define paths
-    CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
-    MODEL_SAVE_PATH = "/kaggle/working/models/skinning_cancer_prediction_model.keras"
-    CHECKPOINT_PATH = "/kaggle/working/models/checkpoint.keras"  # Path to load pre-trained model
+    # Define Kaggle paths
+    # CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
+    # IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
+    # MODEL_SAVE_PATH = "/kaggle/working/models/skinning_cancer_prediction_model.keras"
+    # CHECKPOINT_PATH = "/kaggle/working/models/checkpoint.keras"  # Path to load pre-trained model
+
+    # Define local paths
+    CSV_PATH = "data/ISIC_2020_Training_GroundTruth_v2.csv"
+    IMAGE_DIR = "data/train"
+    MODEL_SAVE_PATH = "models/skinning_cancer_prediction_model.keras"
+    CHECKPOINT_PATH = "models/checkpoint.keras"  # Path to load pre-trained model
     
     # Create models directory if it doesn't exist
     os.makedirs("models", exist_ok=True)

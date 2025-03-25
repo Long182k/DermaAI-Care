@@ -16,8 +16,12 @@
 # Training specific ignores
 /Training/data/
 /Training/venv/
+/Training/annotated_images/
+/Training/xml_annotations/
 /Training/linux_env/
 /Training/__pycache__/
+/Training/training_model/src/__pycache__/
+/Training/image_processing/__pycache__/
 /Training/*.pyc
 /Training/*.pyo
 /Training/*.pyd

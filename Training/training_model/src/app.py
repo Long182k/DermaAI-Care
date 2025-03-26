@@ -7,9 +7,19 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input, InceptionResNetV2
 from tensorflow.keras.layers import Dense, Dropout, Input
+import torch
+import sys
+from PIL import Image
 
 # Import custom layer with correct relative import
 from custom_layers import CustomScaleLayer
+
+# Import the preprocessing function from data_preprocessing
+from src.data_preprocessing import preprocess_image as data_preprocess_image
+
+# Add YOLOv5 directory to path
+YOLO_PATH = "/Users/drake/Documents/UWE/DermaAI-Care/Training/image_processing/yolov5"
+sys.path.append(YOLO_PATH)
 
 app = Flask(__name__)
 
@@ -21,14 +31,29 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # Create upload directory if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Load the trained model
-MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '/kaggle/working/models/skinning_cancer_prediction_model.keras')
+# Path configurations
+YOLO_MODEL_PATH = "/Users/drake/Documents/UWE/DermaAI-Care/Training/image_processing/lesion_runs/yolov5x_skin_lesions4/weights/best.pt"
+CLASSIFICATION_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models/skin_cancer_prediction_model.keras')
+DETECTION_OUTPUT_DIR = "/Users/drake/Documents/UWE/DermaAI-Care/Training/image_processing/yolov5/runs/detect/exp"
 
 # Define custom objects dictionary for model loading
 custom_objects = {
     'CustomScaleLayer': CustomScaleLayer
 }
 
+# Load YOLOv5 model
+def load_yolo_model():
+    try:
+        # Load YOLOv5 model
+        model = torch.hub.load(YOLO_PATH, 'custom', path=YOLO_MODEL_PATH, source='local')
+        model.conf = 0.25  # Confidence threshold
+        model.iou = 0.45   # IoU threshold
+        return model
+    except Exception as e:
+        print(f"Error loading YOLOv5 model: {e}")
+        return None
+
+# Create classification model architecture
 def create_model_architecture(num_classes=6):  # Adjust num_classes to match saved weights
     # Clear any existing models from memory
     tf.keras.backend.clear_session()
@@ -67,99 +92,144 @@ def create_model_architecture(num_classes=6):  # Adjust num_classes to match sav
     
     return model
 
-# Load the model with custom objects
-try:
-    # Set memory growth to avoid OOM errors
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
+# Function to run YOLOv5 detection
+def detect_skin_lesion(image_path, yolo_model):
+    # Run detection
+    results = yolo_model(image_path)
     
-    # Recreate the model architecture with the correct number of classes
-    model = create_model_architecture(num_classes=6)  # Ensure this matches the saved model
+    # Save results to the detection output directory
+    results.save(save_dir=DETECTION_OUTPUT_DIR)
     
-    # Load weights from the saved model
-    model.load_weights(MODEL_PATH)
-    print(f"Model loaded successfully from {MODEL_PATH}")
+    # Get the image name without extension
+    image_name = os.path.splitext(os.path.basename(image_path))[0]
     
-except Exception as e:
-    print(f"Error loading model: {e}")
-    model = None
-    print("WARNING: Model not loaded. Predictions will not work!")
-    print("Make sure to train the model first using train.py")
+    # Path to the label file
+    label_path = os.path.join(DETECTION_OUTPUT_DIR, 'labels', f"{image_name}.txt")
+    
+    # Check if label file exists (detection found)
+    if not os.path.exists(label_path):
+        return None, None
+    
+    # Read the label file to get bounding box
+    with open(label_path, 'r') as f:
+        label_content = f.read().strip().split()
+    
+    # Parse label content (class x_center y_center width height confidence)
+    if len(label_content) >= 5:
+        class_id = int(label_content[0])
+        x_center = float(label_content[1])
+        y_center = float(label_content[2])
+        width = float(label_content[3])
+        height = float(label_content[4])
+        confidence = float(label_content[5]) if len(label_content) > 5 else 1.0
+        
+        # Return the bounding box coordinates
+        bbox = [x_center, y_center, width, height]
+        
+        # Path to the detected image
+        detected_image_path = os.path.join(DETECTION_OUTPUT_DIR, image_name + '.jpg')
+        if not os.path.exists(detected_image_path):
+            detected_image_path = os.path.join(DETECTION_OUTPUT_DIR, image_name + '.png')
+        
+        return detected_image_path, bbox
+    
+    return None, None
 
-def preprocess_image(image_path):
-    """
-    Preprocess single image according to InceptionResNetV2 requirements
-    """
-    # Load image in target size (224x224)
-    img = load_img(image_path, target_size=(224, 224))
-    
-    # Convert to array
-    img_array = img_to_array(img)
-    
-    # Expand dimensions for batch processing
-    img_array = np.expand_dims(img_array, axis=0)
-    
-    # Apply InceptionResNetV2 preprocessing
-    processed_img = preprocess_input(img_array)
-    
-    return processed_img
-
+# Function to check if file extension is allowed
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# Load models at startup
+print("Loading models...")
+yolo_model = load_yolo_model()
+classification_model = create_model_architecture()
+
+# Try to load saved weights
+try:
+    classification_model.load_weights(CLASSIFICATION_MODEL_PATH)
+    print(f"Classification model loaded successfully from {CLASSIFICATION_MODEL_PATH}")
+except Exception as e:
+    print(f"Error loading classification model: {e}")
+
+# Map class indices to diagnosis names
+class_to_diagnosis = {
+    0: "nevus",
+    1: "melanoma",
+    2: "seborrheic keratosis",
+    3: "basal cell carcinoma",
+    4: "actinic keratosis",
+    5: "squamous cell carcinoma"
+}
+
+# Map diagnosis to benign/malignant status
+diagnosis_to_status = {
+    "nevus": "benign",
+    "melanoma": "malignant",
+    "seborrheic keratosis": "benign",
+    "basal cell carcinoma": "malignant",
+    "actinic keratosis": "benign",
+    "squamous cell carcinoma": "malignant"
+}
+
 @app.route('/predict', methods=['POST'])
 def predict():
-    # Validate request
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image provided'}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part in the request'}), 400
     
-    file = request.files['image']
+    file = request.files['file']
+    
     if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-        
-    if not allowed_file(file.filename):
-        return jsonify({'error': 'Invalid file type'}), 400
-
-    try:
-        # Check if model is loaded
-        if model is None:
-            return jsonify({'error': 'Model not loaded. Please train the model first.'}), 500
-            
-        # Save file temporarily
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if file and allowed_file(file.filename):
+        # Secure the filename and save the uploaded file
         filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
         
-        # Preprocess image
-        processed_img = preprocess_image(filepath)
-        
-        # Make prediction
-        predictions = model.predict(processed_img)
-        predicted_class = np.argmax(predictions, axis=1)[0]  # Get the first element
-        confidence = float(predictions[0][predicted_class])
-        
-        # Cleanup
-        os.remove(filepath)
-        
-        return jsonify({
-            'class': int(predicted_class),
-            'confidence': confidence
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        try:
+            # Step 1: Detect skin lesion using YOLOv5
+            detected_image_path, bbox = detect_skin_lesion(file_path, yolo_model)
+            
+            if detected_image_path is None or bbox is None:
+                return jsonify({'error': 'No skin lesion detected in the image'}), 400
+            
+            # Step 2: Preprocess the detected image with bounding box
+            processed_img = data_preprocess_image(detected_image_path, bbox)
+            
+            # Step 3: Make prediction with the classification model
+            prediction = classification_model.predict(processed_img)
+            
+            # Get the predicted class index
+            predicted_class_idx = np.argmax(prediction[0])
+            confidence = float(prediction[0][predicted_class_idx])
+            
+            # Get the diagnosis and status
+            diagnosis = class_to_diagnosis.get(predicted_class_idx, "unknown")
+            status = diagnosis_to_status.get(diagnosis, "unknown")
+            
+            # Return the prediction result
+            result = {
+                'diagnosis': diagnosis,
+                'status': status,
+                'confidence': confidence,
+                'class_probabilities': {class_to_diagnosis[i]: float(prob) for i, prob in enumerate(prediction[0])}
+            }
+            
+            return jsonify(result)
+            
+        except Exception as e:
+            return jsonify({'error': f'Error during prediction: {str(e)}'}), 500
+        finally:
+            # Clean up the uploaded file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+    
+    return jsonify({'error': 'Invalid file format. Allowed formats: png, jpg, jpeg'}), 400
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'model_loaded': model is not None
-    })
+    return jsonify({'status': 'healthy', 'models_loaded': yolo_model is not None and classification_model is not None})
 
 if __name__ == '__main__':
-    # Run the app
-    print("Starting DermaAI-Care prediction service...")
-    print(f"Model status: {'Loaded' if model is not None else 'Not loaded'}")
-    app.run(host='0.0.0.0', port=5000, debug=False)  # Set debug=False in production
+    app.run(debug=True, host='0.0.0.0', port=5000)

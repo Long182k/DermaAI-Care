@@ -3,47 +3,124 @@ import mlflow
 import tensorflow as tf
 from tensorflow.keras.applications import InceptionResNetV2
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout, Input, Layer
+import numpy as np
+import os
+
+# Import PEFT from Hugging Face
+try:
+    from peft import (
+        get_peft_model, 
+        LoraConfig, 
+        TaskType, 
+        PeftModel, 
+        PeftConfig
+    )
+    PEFT_AVAILABLE = True
+except ImportError:
+    print("PEFT library not found. Installing...")
+    os.system("pip install -q peft")
+    try:
+        from peft import (
+            get_peft_model, 
+            LoraConfig, 
+            TaskType, 
+            PeftModel, 
+            PeftConfig
+        )
+        PEFT_AVAILABLE = True
+    except ImportError:
+        print("Failed to install PEFT. Using standard fine-tuning instead.")
+        PEFT_AVAILABLE = False
 
 # Define strategy at module level so it can be imported
 strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
 
-def build_model(num_classes):
+# Custom LoRA layer for TensorFlow
+class LoRALayer(Layer):
+    def __init__(self, in_features, out_features, r=8, alpha=32, **kwargs):
+        super(LoRALayer, self).__init__(**kwargs)
+        self.in_features = in_features
+        self.out_features = out_features
+        self.r = r
+        self.alpha = alpha
+        
+        # Initialize A with Gaussian and B with zeros
+        self.lora_A = self.add_weight(
+            "lora_A", 
+            shape=(self.in_features, self.r),
+            initializer=tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.02),
+            trainable=True
+        )
+        self.lora_B = self.add_weight(
+            "lora_B", 
+            shape=(self.r, self.out_features),
+            initializer=tf.keras.initializers.Zeros(),
+            trainable=True
+        )
+        
+        # Scaling factor
+        self.scaling = self.alpha / self.r
+        
+    def call(self, inputs):
+        # LoRA adaptation: inputs @ (A @ B) * scaling
+        return tf.matmul(tf.matmul(inputs, self.lora_A), self.lora_B) * self.scaling
+    
+    def get_config(self):
+        config = super(LoRALayer, self).get_config()
+        config.update({
+            "in_features": self.in_features,
+            "out_features": self.out_features,
+            "r": self.r,
+            "alpha": self.alpha
+        })
+        return config
+
+# At the beginning of the file
+from tensorflow.keras.mixed_precision import set_global_policy
+
+# In the build_peft_model function
+def build_peft_model(num_classes, r=8, alpha=32):
     """
-    Build and compile the model with memory optimizations
+    Build and compile the model with PEFT (LoRA) optimizations
     """
+    # Enable mixed precision for faster training on L4 GPU
+    set_global_policy('mixed_float16')
+    
     with strategy.scope():
-        # Load the pre-trained InceptionResNetV2 model with smaller input size
+        # Create the base model
         base_model = InceptionResNetV2(
             weights='imagenet',
             include_top=False,
             input_shape=(224, 224, 3),
-            pooling='avg'  # Use average pooling to handle dimensions consistently
+            pooling='avg'
         )
         
-        # Freeze all layers initially
+        # Freeze the base model
         base_model.trainable = False
         
-        # Build the model using Functional API with proper dimension handling
-        inputs = tf.keras.Input(shape=(224, 224, 3))
+        # Build the model using Functional API
+        inputs = Input(shape=(224, 224, 3))
         x = base_model(inputs, training=False)
-        # Remove the separate GlobalAveragePooling2D since we use pooling='avg' in base_model
-        x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
-        x = Dropout(0.5)(x)
+        
+        # Apply LoRA to the final dense layer
+        dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
+        dense_output = dense_layer(x)
+        
+        # Add LoRA adaptation
+        lora_adaptation = LoRALayer(512, 512, r=r, alpha=alpha, name='lora_adaptation')(dense_output)
+        
+        # Combine original dense output with LoRA adaptation
+        combined = tf.keras.layers.Add()([dense_output, lora_adaptation])
+        
+        x = Dropout(0.5)(combined)
         outputs = Dense(num_classes, activation='softmax', kernel_initializer='he_normal')(x)
         
         model = Model(inputs=inputs, outputs=outputs)
         
-        # Use memory-efficient optimizer
-        optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.001,
-            beta_1=0.9,
-            beta_2=0.999,
-            epsilon=1e-07
-        )
-        
+        # Compile the model
         model.compile(
-            optimizer=optimizer,
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
             loss='categorical_crossentropy',
             metrics=[
                 'accuracy',
@@ -55,18 +132,44 @@ def build_model(num_classes):
         
         return model
 
-def cross_validate_model(model, data, labels, k=5):
-    kfold = KFold(n_splits=k, shuffle=True)
-    scores = []
-    
-    for fold, (train_ids, val_ids) in enumerate(kfold.split(data)):
-        # Train and evaluate model for each fold
-        history = model.fit(
-            data[train_ids], labels[train_ids],
-            validation_data=(data[val_ids], labels[val_ids]),
-            epochs=10
+def build_model(num_classes):
+    """
+    Build and compile the model with memory optimizations
+    """
+    with strategy.scope():
+        # Create the base model
+        base_model = InceptionResNetV2(
+            weights='imagenet',
+            include_top=False,
+            input_shape=(224, 224, 3),
+            pooling='avg'
         )
-        scores.append(history.history['val_accuracy'][-1]) 
+        
+        # Freeze the base model
+        base_model.trainable = False
+        
+        # Build the model using Functional API
+        inputs = Input(shape=(224, 224, 3))
+        x = base_model(inputs, training=False)
+        x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
+        x = Dropout(0.5)(x)
+        outputs = Dense(num_classes, activation='softmax', kernel_initializer='he_normal')(x)
+        
+        model = Model(inputs=inputs, outputs=outputs)
+        
+        # Compile the model
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss='categorical_crossentropy',
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc'),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        )
+        
+        return model
 
 def train_model(model, train_generator, val_generator, epochs, early_stopping_patience, reduce_lr_patience, class_weights=None):
     """
@@ -81,65 +184,32 @@ def train_model(model, train_generator, val_generator, epochs, early_stopping_pa
             min_delta=0.01  # Minimum change to qualify as an improvement
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_accuracy',
-            factor=0.2,
+            monitor='val_loss',
+            factor=0.5,
             patience=reduce_lr_patience,
             min_lr=1e-6,
-            mode='max',
             verbose=1
         ),
         tf.keras.callbacks.ModelCheckpoint(
-            '/kaggle/working/models/checkpoint.keras',
+            filepath='models/checkpoint.keras',
             monitor='val_accuracy',
             save_best_only=True,
-            mode='max'
-        ),
-        tf.keras.callbacks.BackupAndRestore(backup_dir='./backup'),
-        tf.keras.callbacks.TerminateOnNaN()
+            mode='max',
+            verbose=1
+        )
     ]
     
-    with mlflow.start_run():
-        mlflow.log_param("epochs", epochs)
-        mlflow.log_param("batch_size", train_generator.batch_size)
-        
-        if hasattr(model.optimizer, 'learning_rate'):
-            if hasattr(model.optimizer.learning_rate, 'initial_learning_rate'):
-                initial_lr = model.optimizer.learning_rate.initial_learning_rate
-            else:
-                initial_lr = float(model.optimizer.learning_rate)
-        else:
-            initial_lr = float(model.optimizer._learning_rate)
-            
-        mlflow.log_param("initial_learning_rate", initial_lr)
-        
-        # Use mixed precision for faster training
-        tf.keras.mixed_precision.set_global_policy('mixed_float16')
-        
-        # Configure training to be thread-safe and optimize for performance
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
-        options.experimental_optimization.parallel_batch = True
-        
-        history = model.fit(
-            train_generator,
-            validation_data=val_generator,
-            epochs=epochs,
-            callbacks=callbacks,
-            class_weight=class_weights
-        )
-        
-        # Log metrics
-        mlflow.log_metrics({
-            "final_accuracy": history.history['accuracy'][-1],
-            "final_val_accuracy": history.history['val_accuracy'][-1],
-            "final_auc": history.history['auc'][-1],
-            "final_val_auc": history.history['val_auc'][-1],
-            "final_precision": history.history['precision'][-1],
-            "final_val_precision": history.history['val_precision'][-1],
-            "final_recall": history.history['recall'][-1],
-            "final_val_recall": history.history['val_recall'][-1]
-        })
-        
+    # Train the model
+    history = model.fit(
+        train_generator,
+        validation_data=val_generator,
+        epochs=epochs,
+        callbacks=callbacks,
+        class_weight=class_weights,
+        workers=4,
+        use_multiprocessing=True
+    )
+    
     return history
 
 def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience):
@@ -163,45 +233,85 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
                 pooling='avg'
             )
             
-            inputs = tf.keras.Input(shape=(224, 224, 3))
-            x = base_model(inputs, training=True)
+            # Unfreeze the last 20 layers of the base model
+            for layer in base_model.layers[-20:]:
+                layer.trainable = True
+                
+            # Build the model using Functional API
+            inputs = Input(shape=(224, 224, 3))
+            x = base_model(inputs)
             x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
             x = Dropout(0.5)(x)
-            outputs = Dense(model.output_shape[-1], activation='softmax', kernel_initializer='he_normal')(x)
+            outputs = Dense(model.output.shape[1], activation='softmax', kernel_initializer='he_normal')(x)
             
             model = Model(inputs=inputs, outputs=outputs)
             
-            # Restore weights
-            try:
-                model.set_weights(weights)
-                print("Weights restored successfully")
-            except ValueError as e:
-                print(f"Error restoring weights: {e}")
-                print("Creating fresh model for fine-tuning...")
+            # Set the weights
+            model.set_weights(weights)
             
-            # Unfreeze the last few layers of the base model
-            base_model.trainable = True
-            for layer in base_model.layers[:-20]:  # Freeze all except last 20 layers
-                layer.trainable = False
-            
-            # Recompile with a lower learning rate
+            # Compile with a lower learning rate
             model.compile(
-                optimizer=tf.keras.optimizers.Adam(1e-5),
+                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
                 loss='categorical_crossentropy',
-                metrics=['accuracy',
-                        tf.keras.metrics.AUC(name='auc'),
-                        tf.keras.metrics.Precision(name='precision'),
-                        tf.keras.metrics.Recall(name='recall')]
+                metrics=[
+                    'accuracy',
+                    tf.keras.metrics.AUC(name='auc'),
+                    tf.keras.metrics.Precision(name='precision'),
+                    tf.keras.metrics.Recall(name='recall')
+                ]
             )
+    else:
+        # If we're already in the right strategy scope, just unfreeze layers
+        base_model = model.layers[1]  # Assuming base_model is the second layer
+        
+        # Unfreeze the last 20 layers of the base model
+        for layer in base_model.layers[-20:]:
+            layer.trainable = True
+            
+        # Recompile with a lower learning rate
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+            loss='categorical_crossentropy',
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc'),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        )
     
-    # Train with fine-tuning
-    history = train_model(
-        model,
+    # Define callbacks for fine-tuning
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor='val_accuracy',
+            patience=early_stopping_patience,
+            restore_best_weights=True,
+            mode='max'
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.2,
+            patience=2,
+            min_lr=1e-7,
+            verbose=1
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath='models/fine_tuned_checkpoint.keras',
+            monitor='val_accuracy',
+            save_best_only=True,
+            mode='max',
+            verbose=1
+        )
+    ]
+    
+    # Fine-tune the model
+    history = model.fit(
         train_generator,
-        val_generator,
+        validation_data=val_generator,
         epochs=epochs,
-        early_stopping_patience=early_stopping_patience,
-        reduce_lr_patience=1  # Faster LR reduction during fine-tuning
+        callbacks=callbacks,
+        workers=4,
+        use_multiprocessing=True
     )
     
     return history

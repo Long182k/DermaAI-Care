@@ -7,13 +7,36 @@ from PIL import Image
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.utils.class_weight import compute_class_weight
+import glob
 
-def preprocess_image(image_path):
+def preprocess_image(image_path, bbox=None):
     """
     Preprocess single image according to InceptionResNetV2 requirements
+    If bbox is provided, crop the image to the bounding box first
     """
-    # Load image in target size (224x224)
-    img = load_img(image_path, target_size=(224, 224))
+    # Load image
+    img = Image.open(image_path)
+    
+    # If bounding box is provided, crop the image
+    if bbox is not None:
+        width, height = img.size
+        x_center, y_center, box_width, box_height = bbox
+        
+        # Convert normalized coordinates to pixel values
+        x1 = int((x_center - box_width/2) * width)
+        y1 = int((y_center - box_height/2) * height)
+        x2 = int((x_center + box_width/2) * width)
+        y2 = int((y_center + box_height/2) * height)
+        
+        # Ensure coordinates are within image boundaries
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(width, x2), min(height, y2)
+        
+        # Crop the image
+        img = img.crop((x1, y1, x2, y2))
+    
+    # Resize to target size
+    img = img.resize((224, 224))
     
     # Convert to array
     img_array = img_to_array(img)
@@ -35,38 +58,78 @@ def create_augmentation_pipeline():
         tf.keras.layers.RandomContrast(0.2),
     ])
 
-def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=5):
+def load_yolo_detections(image_dir, labels_dir, csv_path, min_samples_per_class=2, n_folds=5):
     """
-    Load and prepare data from ISIC 2020 dataset using k-fold cross validation
+    Load YOLOv5 detected images and their corresponding labels
     """
-    # Read the CSV file
+    # Read the CSV file for diagnosis information
     df = pd.read_csv(csv_path)
     
-    # Create full image paths
-    df['image_path'] = df['image_name'].apply(lambda x: os.path.join(image_dir, x + '.jpg'))
+    # Get all PNG images from the detection directory
+    image_files = glob.glob(os.path.join(image_dir, "*.png"))
     
-    # Verify all images exist
-    missing_images = df[~df['image_path'].apply(os.path.exists)]['image_name'].tolist()
-    if missing_images:
-        print(f"Warning: {len(missing_images)} images are missing")
+    # Create a new dataframe for detected images
+    detected_data = []
     
-    # Remove rows with missing images
-    df = df[df['image_path'].apply(os.path.exists)]
+    for img_path in image_files:
+        # Extract image name from path
+        img_name = os.path.basename(img_path).split('.')[0]
+        
+        # Find corresponding label file
+        label_path = os.path.join(labels_dir, f"{img_name}.txt")
+        
+        # Skip if label file doesn't exist
+        if not os.path.exists(label_path):
+            continue
+            
+        # Find the original image entry in the CSV
+        original_entry = df[df['image_name'] == img_name]
+        
+        # Skip if no matching entry in CSV
+        if len(original_entry) == 0:
+            continue
+            
+        # Read the label file to get bounding box
+        with open(label_path, 'r') as f:
+            label_content = f.read().strip().split()
+            
+        # Parse label content (class x_center y_center width height confidence)
+        if len(label_content) >= 5:  # Ensure we have at least the basic bbox info
+            class_id = int(label_content[0])
+            x_center = float(label_content[1])
+            y_center = float(label_content[2])
+            width = float(label_content[3])
+            height = float(label_content[4])
+            confidence = float(label_content[5]) if len(label_content) > 5 else 1.0
+            
+            # Add to detected data
+            detected_data.append({
+                'image_name': img_name,
+                'image_path': img_path,
+                'diagnosis': original_entry['diagnosis'].values[0],
+                'benign_malignant': original_entry['benign_malignant'].values[0],
+                'target': original_entry['target'].values[0],
+                'bbox': [x_center, y_center, width, height],
+                'confidence': confidence
+            })
+    
+    # Create dataframe from detected data
+    detected_df = pd.DataFrame(detected_data)
     
     # Count samples per class
-    class_counts = df['diagnosis'].value_counts()
+    class_counts = detected_df['diagnosis'].value_counts()
     print("\nSamples per class before filtering:")
     print(class_counts)
     
     # Filter out classes with too few samples
     valid_classes = class_counts[class_counts >= min_samples_per_class].index
-    df = df[df['diagnosis'].isin(valid_classes)]
+    detected_df = detected_df[detected_df['diagnosis'].isin(valid_classes)]
     
     print("\nSamples per class after filtering:")
-    print(df['diagnosis'].value_counts())
+    print(detected_df['diagnosis'].value_counts())
     
     # Create class mappings for diagnosis
-    diagnosis_to_idx = {diagnosis: idx for idx, diagnosis in enumerate(df['diagnosis'].unique())}
+    diagnosis_to_idx = {diagnosis: idx for idx, diagnosis in enumerate(detected_df['diagnosis'].unique())}
     
     print(f"\nNumber of classes: {len(diagnosis_to_idx)}")
     print("Classes:", list(diagnosis_to_idx.keys()))
@@ -77,7 +140,7 @@ def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=
         
         # Store fold indices
         fold_indices = []
-        for fold_idx, (train_idx, val_idx) in enumerate(kfold.split(df)):
+        for fold_idx, (train_idx, val_idx) in enumerate(kfold.split(detected_df)):
             fold_indices.append({
                 'fold': fold_idx + 1,
                 'train_idx': train_idx,
@@ -89,16 +152,16 @@ def load_and_prepare_data(csv_path, image_dir, min_samples_per_class=2, n_folds=
             print(f"Training size: {len(train_idx)}")
             print(f"Validation size: {len(val_idx)}")
         
-        return df, fold_indices, diagnosis_to_idx
+        return detected_df, fold_indices, diagnosis_to_idx
         
     except Exception as e:
         print(f"\nError in k-fold split: {str(e)}")
         print("Dataset statistics:")
-        print(df['diagnosis'].value_counts())
+        print(detected_df['diagnosis'].value_counts())
         raise
 
-class ISICDataGenerator(tf.keras.utils.Sequence):
-    def __init__(self, dataframe, diagnosis_to_idx, batch_size=16, is_training=True):
+class YOLODetectionGenerator(tf.keras.utils.Sequence):
+    def __init__(self, dataframe, diagnosis_to_idx, batch_size=64, is_training=True):
         super().__init__()
         self.df = dataframe
         self.batch_size = batch_size
@@ -111,6 +174,7 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
         # Pre-compute image paths to avoid memory leaks
         self.image_paths = self.df['image_path'].values
         self.diagnoses = self.df['diagnosis'].values
+        self.bboxes = self.df['bbox'].values
         
         if is_training:
             np.random.shuffle(self.indices)
@@ -129,12 +193,30 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
         batch_y = np.zeros((len(batch_indices), self.n_classes))
         
         for i, idx in enumerate(batch_indices):
-            # Load and resize image to 224x224
-            img = load_img(self.image_paths[idx], target_size=(224, 224))
-            img_array = img_to_array(img)
+            # Load image and crop to bounding box
+            img = Image.open(self.image_paths[idx])
             
-            # Ensure image is resized to 224x224
-            img_array = tf.image.resize(img_array, [224, 224])
+            # Apply bounding box cropping
+            bbox = self.bboxes[idx]
+            width, height = img.size
+            x_center, y_center, box_width, box_height = bbox
+            
+            # Convert normalized coordinates to pixel values
+            x1 = int((x_center - box_width/2) * width)
+            y1 = int((y_center - box_height/2) * height)
+            x2 = int((x_center + box_width/2) * width)
+            y2 = int((y_center + box_height/2) * height)
+            
+            # Ensure coordinates are within image boundaries
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(width, x2), min(height, y2)
+            
+            # Crop the image
+            img = img.crop((x1, y1, x2, y2))
+            
+            # Resize to target size
+            img = img.resize((224, 224))
+            img_array = img_to_array(img)
             
             if self.is_training and self.augmentation:
                 img_array = self.augmentation(img_array)
@@ -149,13 +231,15 @@ class ISICDataGenerator(tf.keras.utils.Sequence):
         
         return batch_x, batch_y
 
-def create_generators(csv_path, image_dir, batch_size, min_samples_per_class, n_folds,fold_idx):
+# In the create_yolo_generators function
+def create_yolo_generators(csv_path, image_dir, labels_dir, batch_size, min_samples_per_class, n_folds, fold_idx):
     """
-    Create train and validation generators for a specific fold
+    Create train and validation generators for a specific fold using YOLO detected images
     """
-    df, fold_indices, diagnosis_to_idx = load_and_prepare_data(
-        csv_path, 
-        image_dir,
+    df, fold_indices, diagnosis_to_idx = load_yolo_detections(
+        image_dir, 
+        labels_dir,
+        csv_path,
         min_samples_per_class=min_samples_per_class,
         n_folds=n_folds
     )
@@ -170,14 +254,14 @@ def create_generators(csv_path, image_dir, batch_size, min_samples_per_class, n_
     val_df = df.iloc[val_idx]
     
     # Create generators with smaller batch size
-    train_generator = ISICDataGenerator(
+    train_generator = YOLODetectionGenerator(
         train_df,
         diagnosis_to_idx,
         batch_size=batch_size,
         is_training=True
     )
     
-    val_generator = ISICDataGenerator(
+    val_generator = YOLODetectionGenerator(
         val_df,
         diagnosis_to_idx,
         batch_size=batch_size,
@@ -185,32 +269,89 @@ def create_generators(csv_path, image_dir, batch_size, min_samples_per_class, n_
     )
     
     n_classes = len(diagnosis_to_idx)
-    return train_generator, val_generator, diagnosis_to_idx, n_classes, len(fold_indices)
+    # Create generators with prefetching for better GPU utilization
+    train_dataset = tf.data.Dataset.from_generator(
+        lambda: train_generator,
+        output_signature=(
+            tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+            tf.TensorSpec(shape=(None, len(diagnosis_to_idx)), dtype=tf.float32)
+        )
+    ).prefetch(tf.data.AUTOTUNE)
+    
+    val_dataset = tf.data.Dataset.from_generator(
+        lambda: val_generator,
+        output_signature=(
+            tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+            tf.TensorSpec(shape=(None, len(diagnosis_to_idx)), dtype=tf.float32)
+        )
+    ).prefetch(tf.data.AUTOTUNE)
+    
+    return train_dataset, val_dataset, diagnosis_to_idx, n_classes, len(fold_indices)
 
-def analyze_dataset(csv_path):
+def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
     """
-    Analyze dataset statistics
+    Analyze dataset statistics for YOLO detected images
     """
+    # Read the CSV file for diagnosis information
     df = pd.read_csv(csv_path)
+    
+    # Get all PNG images from the detection directory
+    image_files = glob.glob(os.path.join(image_dir, "*.png"))
+    
+    # Create a new dataframe for detected images
+    detected_data = []
+    
+    for img_path in image_files:
+        # Extract image name from path
+        img_name = os.path.basename(img_path).split('.')[0]
+        
+        # Find corresponding label file
+        label_path = os.path.join(labels_dir, f"{img_name}.txt")
+        
+        # Skip if label file doesn't exist
+        if not os.path.exists(label_path):
+            continue
+            
+        # Find the original image entry in the CSV
+        original_entry = df[df['image_name'] == img_name]
+        
+        # Skip if no matching entry in CSV
+        if len(original_entry) == 0:
+            continue
+            
+        # Read the label file to get bounding box
+        with open(label_path, 'r') as f:
+            label_content = f.read().strip().split()
+            
+        # Parse label content (class x_center y_center width height confidence)
+        if len(label_content) >= 5:  # Ensure we have at least the basic bbox info
+            # Add to detected data
+            detected_data.append({
+                'image_name': img_name,
+                'diagnosis': original_entry['diagnosis'].values[0],
+                'benign_malignant': original_entry['benign_malignant'].values[0],
+                'target': original_entry['target'].values[0]
+            })
+    
+    # Create dataframe from detected data
+    detected_df = pd.DataFrame(detected_data)
     
     print("Dataset Statistics:")
     print("-" * 50)
-    print(f"Total number of images: {len(df)}")
+    print(f"Total number of detected images: {len(detected_df)}")
     print("\nDiagnosis distribution:")
-    diagnosis_counts = df['diagnosis'].value_counts()
+    diagnosis_counts = detected_df['diagnosis'].value_counts()
     print(diagnosis_counts)
     
     print("\nClasses with less than 2 samples:")
     print(diagnosis_counts[diagnosis_counts < 2])
     
     print("\nBenign/Malignant distribution:")
-    print(df['benign_malignant'].value_counts())
-    print("\nAnatomical site distribution:")
-    print(df['anatom_site_general_challenge'].value_counts())
+    print(detected_df['benign_malignant'].value_counts())
     
     # Calculate class weights for imbalanced data (only for classes with enough samples)
     valid_classes = diagnosis_counts[diagnosis_counts >= 2].index
-    valid_df = df[df['diagnosis'].isin(valid_classes)]
+    valid_df = detected_df[detected_df['diagnosis'].isin(valid_classes)]
     
     class_weights = compute_class_weight(
         'balanced',
@@ -225,8 +366,8 @@ def analyze_dataset(csv_path):
 
 # Usage example:
 if __name__ == "__main__":
-    CSV_PATH = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "/kaggle/input/isic-skinning-cancer-dataset/ISIC_2020_Training_JPEG/train"
+    CSV_PATH = "/Users/drake/Documents/UWE/DermaAI-Care/Training/data/ISIC_2020_Training_GroundTruth_v2.csv"
+    IMAGE_DIR = "/Users/drake/Documents/UWE/DermaAI-Care/Training/image_processing/yolov5/runs/detect/exp"
     
     # Analyze dataset
     dataset_stats = analyze_dataset(CSV_PATH)
@@ -238,4 +379,4 @@ if __name__ == "__main__":
         CSV_PATH,
         IMAGE_DIR,
         fold_idx=0
-    ) 
+    )

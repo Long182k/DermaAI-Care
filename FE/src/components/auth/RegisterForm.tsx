@@ -1,4 +1,3 @@
-
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,9 +12,19 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { Calendar as CalendarIcon } from "lucide-react";
 import { format } from "date-fns";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
+import { AxiosError } from "axios";
+import { useAppStore } from "@/store";
+import { useMutation } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { ErrorResponseData } from "@/@util/interface/auth.interface";
+import { RegisterNewUserParams } from "@/@util/types/auth.type"; // Import the type
 
 interface RegisterFormProps {
   onToggle: () => void;
@@ -25,13 +34,69 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
   const { toast } = useToast();
   const [date, setDate] = useState<Date>();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const { signup } = useAppStore();
+  const navigate = useNavigate();
+
+  const [formData, setFormData] = useState<RegisterNewUserParams>({
+    userName: "",
+    firstName: "",
+    lastName: "",
+    email: "",
+    phoneNumber: "",
+    password: "",
+    gender: "MALE",
+    dateOfBirth: new Date(), // Initialize with a Date object
+  });
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast({
-      title: "Coming soon",
-      description: "Registration functionality will be implemented soon.",
-    });
+    try {
+      registerMutation.mutate({ ...formData, dateOfBirth: date });
+
+      toast({
+        title: "Register successful",
+        description: "You have been logged in.",
+      });
+    } catch (error) {
+      toast({
+        title: "Register failed",
+        description: "Please check your credentials and try again.",
+      });
+    }
   };
+
+  const registerMutation = useMutation({
+    mutationFn: signup,
+    onSuccess: (res) => {
+      localStorage.setItem("access_token", res.accessToken);
+      toast({
+        title: "Register successful",
+        description: "You have been registered successful.",
+      });
+      navigate("/");
+
+      // Navigate based on role
+      // if (res.role === "ADMIN") {
+      //   navigate("/dashboard");
+      // } else {
+      //   navigate("/");
+      // }
+    },
+    onError: (error: AxiosError<ErrorResponseData>) => {
+      if (error.response?.status === 401) {
+        const message = error.response?.data?.message;
+        toast({
+          title: "Login failed",
+          description: message,
+        });
+      } else {
+        toast({
+          title: "Login failed",
+          description: "Try Again",
+        });
+      }
+    },
+  });
 
   return (
     <div className="bg-card p-8 rounded-lg shadow-lg">
@@ -48,15 +113,19 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
               id="firstName"
               placeholder="Enter your first name"
               required
+              value={formData.firstName}
+              onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
             />
           </div>
-          
+
           <div className="space-y-2">
             <Label htmlFor="lastName">Last name</Label>
             <Input
               id="lastName"
               placeholder="Enter your last name"
               required
+              value={formData.lastName}
+              onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
             />
           </div>
         </div>
@@ -68,6 +137,8 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
             type="email"
             placeholder="Enter your email"
             required
+            value={formData.email}
+            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
           />
         </div>
 
@@ -78,6 +149,8 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
             type="tel"
             placeholder="Enter your phone number"
             required
+            value={formData.phoneNumber}
+            onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
           />
         </div>
 
@@ -89,9 +162,11 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
               type="password"
               placeholder="••••••••"
               required
+              value={formData.password}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
             />
           </div>
-          
+
           <div className="space-y-2">
             <Label htmlFor="confirmPassword">Confirm Password</Label>
             <Input
@@ -105,14 +180,17 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
 
         <div className="space-y-2">
           <Label>Gender</Label>
-          <Select>
+          <Select
+            value={formData.gender}
+            onValueChange={(value) => setFormData({ ...formData, gender: value })}
+          >
             <SelectTrigger>
               <SelectValue placeholder="Select gender" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="male">Male</SelectItem>
-              <SelectItem value="female">Female</SelectItem>
-              <SelectItem value="other">Other</SelectItem>
+              <SelectItem value="MALE">Male</SelectItem>
+              <SelectItem value="FEMALE">Female</SelectItem>
+              <SelectItem value="OTHER">Other</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -148,7 +226,9 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
         </Button>
 
         <div className="text-center mt-6">
-          <span className="text-muted-foreground">Already have an account?</span>{" "}
+          <span className="text-muted-foreground">
+            Already have an account?
+          </span>{" "}
           <Button type="button" variant="link" onClick={onToggle}>
             Sign in
           </Button>

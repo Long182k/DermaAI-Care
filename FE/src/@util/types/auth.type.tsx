@@ -1,7 +1,12 @@
 export type RegisterNewUserParams = {
+  userName: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
-  username: string;
+  phoneNumber?: string;
   password: string;
+  gender: string;
+  dateOfBirth: Date;
 };
 
 export type LoginParams = {

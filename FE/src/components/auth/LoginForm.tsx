@@ -25,7 +25,6 @@ export const LoginForm = ({ onToggle }: LoginFormProps) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      // await login(formData);
       loginMutation.mutate(formData);
 
       toast({
@@ -43,7 +42,6 @@ export const LoginForm = ({ onToggle }: LoginFormProps) => {
   const loginMutation = useMutation({
     mutationFn: login,
     onSuccess: (res) => {
-      localStorage.setItem("access_token", res.accessToken);
       toast({
         title: "Login successful",
         description: "You have been logged in.",

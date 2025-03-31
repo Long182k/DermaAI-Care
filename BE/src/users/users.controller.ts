@@ -24,9 +24,14 @@ export class UsersController {
     private cloudinaryService: CloudinaryService,
   ) {}
 
-  @Get()
-  findAll(@CurrentUser('userId') userId: string) {
-    return this.usersService.findAll(userId);
+  @Get('/doctor/:doctorId')
+  findAll(@Param('doctorId') doctorId: string) {
+    return this.usersService.findDoctorByID(doctorId);
+  }
+
+  @Get('/doctors')
+  findAllDoctors() {
+    return this.usersService.findAllDoctors();
   }
 
   @Get('/email_param/:email')

@@ -21,33 +21,41 @@ export class ScheduleService {
           .add(week, 'weeks')
           .add(day - 1, 'days');
 
-        // Morning schedule (8 AM - 12 PM)
-        schedules.push({
-          doctorId,
-          startTime: currentDate
-            .clone()
-            .set({ hour: 8, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(),
-          endTime: currentDate
-            .clone()
-            .set({ hour: 12, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(),
-          status: ScheduleStatus.AVAILABLE,
-        });
+        // Morning schedule (8 AM - 12 PM) with 30-minute slots
+        for (let hour = 8; hour < 12; hour++) {
+          for (let minute = 0; minute < 60; minute += 30) {
+            const slotStart = currentDate
+              .clone()
+              .set({ hour, minute, second: 0, millisecond: 0 });
+            
+            const slotEnd = slotStart.clone().add(30, 'minutes');
+            
+            schedules.push({
+              doctorId,
+              startTime: slotStart.toISOString(),
+              endTime: slotEnd.toISOString(),
+              status: ScheduleStatus.AVAILABLE,
+            });
+          }
+        }
 
-        // Afternoon schedule (1 PM - 6 PM)
-        schedules.push({
-          doctorId,
-          startTime: currentDate
-            .clone()
-            .set({ hour: 13, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(),
-          endTime: currentDate
-            .clone()
-            .set({ hour: 18, minute: 0, second: 0, millisecond: 0 })
-            .toISOString(),
-          status: ScheduleStatus.AVAILABLE,
-        });
+        // Afternoon schedule (1 PM - 6 PM) with 30-minute slots
+        for (let hour = 13; hour < 18; hour++) {
+          for (let minute = 0; minute < 60; minute += 30) {
+            const slotStart = currentDate
+              .clone()
+              .set({ hour, minute, second: 0, millisecond: 0 });
+            
+            const slotEnd = slotStart.clone().add(30, 'minutes');
+            
+            schedules.push({
+              doctorId,
+              startTime: slotStart.toISOString(),
+              endTime: slotEnd.toISOString(),
+              status: ScheduleStatus.AVAILABLE,
+            });
+          }
+        }
       }
     }
 
@@ -55,13 +63,41 @@ export class ScheduleService {
     return schedules;
   }
 
-  async findDoctorSchedules(doctorId: string, startDate: Date, endDate: Date) {
+  async findDoctorSchedules(
+    doctorId: string, 
+    startDate: Date, 
+    endDate: Date,
+    filter?: 'day' | 'week' | 'month'
+  ) {
+    let adjustedStartDate = new Date(startDate);
+    let adjustedEndDate = new Date(endDate);
+
+    // Apply filter if provided
+    if (filter) {
+      const start = moment(startDate);
+      
+      switch (filter) {
+        case 'day':
+          adjustedStartDate = start.startOf('day').toDate();
+          adjustedEndDate = start.endOf('day').toDate();
+          break;
+        case 'week':
+          adjustedStartDate = start.startOf('week').toDate();
+          adjustedEndDate = start.endOf('week').toDate();
+          break;
+        case 'month':
+          adjustedStartDate = start.startOf('month').toDate();
+          adjustedEndDate = start.endOf('month').toDate();
+          break;
+      }
+    }
+
     return await this.prisma.schedule.findMany({
       where: {
         doctorId,
         startTime: {
-          gte: new Date(startDate).toISOString(),
-          lte: new Date(endDate).toISOString(),
+          gte: adjustedStartDate.toISOString(),
+          lte: adjustedEndDate.toISOString(),
         },
       },
       orderBy: {

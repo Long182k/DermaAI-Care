@@ -14,17 +14,21 @@ export class CreateUserDTO {
   @IsNotEmpty()
   lastName: string;
 
+  @IsEmail()
+  @IsNotEmpty()
+  email: string;
+
   @IsString()
   @IsNotEmpty()
   role: Role;
 
   @IsString()
+  @IsOptional()
+  phoneNumber?: string;
+
+  @IsString()
   @IsNotEmpty()
   password: string;
-
-  @IsEmail()
-  @IsNotEmpty()
-  email: string;
 
   @IsString()
   @IsOptional()
@@ -46,10 +50,6 @@ export class CreateUserDTO {
 
   @IsOptional()
   languages?: Languages;
-
-  @IsString()
-  @IsOptional()
-  phoneNumber?: string;
 
   @IsOptional()
   gender?: Gender;

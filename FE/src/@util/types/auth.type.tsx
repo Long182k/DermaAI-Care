@@ -7,6 +7,7 @@ export type RegisterNewUserParams = {
   password: string;
   gender: string;
   dateOfBirth: Date;
+  role: string;
 };
 
 export type LoginParams = {

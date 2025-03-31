@@ -24,7 +24,7 @@ import { useAppStore } from "@/store";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { ErrorResponseData } from "@/@util/interface/auth.interface";
-import { RegisterNewUserParams } from "@/@util/types/auth.type"; // Import the type
+import { RegisterNewUserParams } from "@/@util/types/auth.type";
 
 interface RegisterFormProps {
   onToggle: () => void;
@@ -45,13 +45,19 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
     phoneNumber: "",
     password: "",
     gender: "MALE",
-    dateOfBirth: new Date(), // Initialize with a Date object
+    dateOfBirth: new Date(),
+    role: "PATIENT",
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      registerMutation.mutate({ ...formData, dateOfBirth: date });
+      registerMutation.mutate({
+        ...formData,
+        dateOfBirth: date,
+        userName: formData.lastName,
+        role: "PATIENT"
+      });
 
       toast({
         title: "Register successful",
@@ -114,7 +120,9 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
               placeholder="Enter your first name"
               required
               value={formData.firstName}
-              onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, firstName: e.target.value })
+              }
             />
           </div>
 
@@ -125,7 +133,9 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
               placeholder="Enter your last name"
               required
               value={formData.lastName}
-              onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, lastName: e.target.value })
+              }
             />
           </div>
         </div>
@@ -138,7 +148,9 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
             placeholder="Enter your email"
             required
             value={formData.email}
-            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            onChange={(e) =>
+              setFormData({ ...formData, email: e.target.value })
+            }
           />
         </div>
 
@@ -150,7 +162,9 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
             placeholder="Enter your phone number"
             required
             value={formData.phoneNumber}
-            onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+            onChange={(e) =>
+              setFormData({ ...formData, phoneNumber: e.target.value })
+            }
           />
         </div>
 
@@ -163,7 +177,9 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
               placeholder="••••••••"
               required
               value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, password: e.target.value })
+              }
             />
           </div>
 
@@ -182,7 +198,9 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
           <Label>Gender</Label>
           <Select
             value={formData.gender}
-            onValueChange={(value) => setFormData({ ...formData, gender: value })}
+            onValueChange={(value) =>
+              setFormData({ ...formData, gender: value })
+            }
           >
             <SelectTrigger>
               <SelectValue placeholder="Select gender" />

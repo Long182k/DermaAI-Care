@@ -454,7 +454,7 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
 # Usage example:
 if __name__ == "__main__":
     CSV_PATH = "/kaggle/input/isic-2020-training-groundtruth-v2/ISIC_2020_Training_GroundTruth_v2.csv"
-    IMAGE_DIR = "/kaggle/input/100-images/exp"
+    IMAGE_DIR = "/kaggle/input/annotated_images"
 
     # Analyze dataset
     dataset_stats = analyze_dataset(CSV_PATH)

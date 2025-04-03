@@ -35,9 +35,9 @@ def main():
     parser = argparse.ArgumentParser(description='Train skin lesion classification model')
     parser.add_argument('--csv_path', type=str, default='/kaggle/input/isic-2020-training-groundtruth-v2/ISIC_2020_Training_GroundTruth_v2.csv',
                         help='Path to CSV file with image metadata')
-    parser.add_argument('--image_dir', type=str, default='/kaggle/input/100-images/exp',
+    parser.add_argument('--image_dir', type=str, default='/kaggle/input/annotated_images',
                         help='Directory containing detected images')
-    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/100-images/exp/labels',
+    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/annotated_images/labels',
                         help='Directory containing YOLO label files')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for training')

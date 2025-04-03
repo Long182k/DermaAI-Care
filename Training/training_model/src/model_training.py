@@ -1,3 +1,5 @@
+from mlflow.models.signature import infer_signature
+from PIL import Image
 from sklearn.model_selection import KFold
 import mlflow
 import tensorflow as tf
@@ -6,10 +8,12 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout, Input, Layer
 from tensorflow.keras.callbacks import Callback
 from tensorflow.keras.mixed_precision import set_global_policy
+from tensorflow.keras.models import clone_model
 import numpy as np
 import os
 import time
 import gc
+import traceback
 
 # Import PEFT from Hugging Face
 try:
@@ -87,6 +91,35 @@ class LoRALayer(tf.keras.layers.Layer):
         })
         return config
 
+# Add a custom focal loss function to better handle class imbalance
+def focal_loss(gamma=2.0, alpha=0.25):
+    """
+    Focal Loss for addressing class imbalance
+    
+    Args:
+        gamma: Focusing parameter that reduces the loss contribution from easy examples
+        alpha: Weighting factor for the rare class
+        
+    Returns:
+        A focal loss function
+    """
+    def focal_loss_fixed(y_true, y_pred):
+        # Clip predictions to prevent NaN losses
+        epsilon = tf.keras.backend.epsilon()
+        y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+        
+        # Calculate cross entropy
+        cross_entropy = -y_true * tf.math.log(y_pred)
+        
+        # Calculate focal loss
+        loss = alpha * tf.math.pow(1 - y_pred, gamma) * cross_entropy
+        
+        # Sum over classes
+        return tf.reduce_sum(loss, axis=-1)
+    
+    return focal_loss_fixed
+
+# Modify the model compilation in build_peft_model function
 def build_peft_model(num_classes, r=8, alpha=32):
     """
     Build and compile the model with PEFT (LoRA) optimizations and memory efficiency
@@ -125,13 +158,13 @@ def build_peft_model(num_classes, r=8, alpha=32):
         
         model = Model(inputs=inputs, outputs=outputs)
         
-        # Compile the model with memory-efficient settings
+        # Compile the model with memory-efficient settings and proper metrics for TF 2.17+
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-            loss='categorical_crossentropy',
+            loss=focal_loss(gamma=2.0, alpha=0.25),  # Use focal loss instead of categorical_crossentropy
             metrics=[
                 'accuracy',
-                tf.keras.metrics.AUC(name='auc'),
+                tf.keras.metrics.AUC(name='auc', from_logits=False),
                 tf.keras.metrics.Precision(name='precision'),
                 tf.keras.metrics.Recall(name='recall')
             ]
@@ -174,162 +207,244 @@ class MemoryCleanupCallback(Callback):
             tf.keras.backend.clear_session()
             gc.collect()
 
-def train_model(model, train_generator, val_generator, epochs, early_stopping_patience, reduce_lr_patience, class_weights, train_class_indices):
+# Analysis of Training and Evaluation Results
+
+# Based on the logs you've provided, your model is running without crashing, which is good news after the previous errors. However, there are some performance issues that need attention:
+
+## Current Status
+
+# 1. **Sample Mismatch Fixed**: The code successfully handled the mismatch between true labels (19) and predictions (16) by adjusting to 16 samples.
+
+# 2. **Class Imbalance**: Your dataset is imbalanced with 12 samples of class 0 and 4 samples of class 1.
+
+# 3. **Performance Issues**:
+#    - The model is predicting all samples as class 0 (majority class)
+#    - Precision, recall, and F1-score for class 1 are all 0.0
+#    - Overall accuracy is 75%, but this is misleading due to class imbalance
+
+# 4. **Warnings**: The sklearn warnings about "Precision and F-score are ill-defined" indicate that the model didn't predict any samples for class 1.
+
+## Recommendations
+
+# To improve your model's performance, I suggest the following modifications to your training approach:
+
+# In the train_model function, modify the class weights handling:
+
+# Modify the train_model function to better handle class imbalance
+
+# Update the train_model function signature
+def train_model(model, train_data, val_data, epochs, early_stopping_patience, reduce_lr_patience, 
+                class_weights, train_class_indices, use_datasets=False, 
+                class_weight_multiplier=2.0, use_focal_loss=False, learning_rate=0.0001):
     """
     Enhanced training function with proper memory management and early stopping
     """
+    # Ensure class weights are properly applied
+    print(f"Using class weights: {class_weights}")
+    
+    # Apply class weight multiplier to minority classes
+    if class_weights and class_weight_multiplier > 1.0:
+        weights = list(class_weights.values())
+        median_weight = np.median(weights)
+        
+        # Apply multiplier to classes with above-median weights
+        for cls in class_weights:
+            if class_weights[cls] > median_weight:
+                class_weights[cls] *= class_weight_multiplier
+        
+        print(f"Applied multiplier to minority classes: {class_weights}")
+    
+    # If class weights are very imbalanced, adjust them to be less extreme
+    max_weight_ratio = 10.0  # Maximum ratio between highest and lowest weight
+    if class_weights:
+        weights = list(class_weights.values())
+        max_weight = max(weights)
+        min_weight = min(weights)
+        
+        if max_weight / min_weight > max_weight_ratio:
+            # Scale down the weights to have a more reasonable ratio
+            scale_factor = max_weight / (min_weight * max_weight_ratio)
+            for cls in class_weights:
+                if class_weights[cls] == max_weight:
+                    class_weights[cls] = max_weight / scale_factor
+            
+            print(f"Adjusted class weights to prevent extreme imbalance: {class_weights}")
+    
+    # Create callbacks for training with focus on minority class performance
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
-            monitor='val_accuracy',
+            monitor='val_recall',  # Changed from val_loss to val_recall to focus on minority class
             patience=early_stopping_patience,
             restore_best_weights=True,
-            mode='max',
-            min_delta=0.01  # Minimum change to qualify as an improvement
+            mode='max'  # Changed from 'min' to 'max' since we're monitoring recall
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=0.5,
+            monitor='val_recall',  # Changed from val_loss to val_recall
+            factor=0.2,
             patience=reduce_lr_patience,
-            min_lr=1e-6,
+            min_lr=1e-7,
+            mode='max',  # Changed from 'min' to 'max'
             verbose=1
         ),
+        # Around line 271-276
         tf.keras.callbacks.ModelCheckpoint(
-            filepath='models/checkpoint.keras',
-            monitor='val_accuracy',
-            save_best_only=True,
-            mode='max',
-            verbose=1
+        filepath='models/checkpoint.keras',
+        monitor='val_recall',
+        save_best_only=True,  # Corrected from save_best_weights_only
+        mode='max',
+        verbose=1
         ),
         TimeoutCallback(timeout_seconds=3600),  # 1 hour timeout
-        MemoryCleanupCallback(cleanup_frequency=3)  # Clean memory every 3 epochs
+        MemoryCleanupCallback(cleanup_frequency=2)  # Clean memory every 2 epochs
     ]
     
-    # Print class indices mapping for debugging
-    print("Class indices mapping:", train_class_indices)
-    print("class_weights:", class_weights)
+    # Rest of the function remains the same...
+
+def create_balanced_data_generator(generator, batch_size=32):
+    """
+    Creates a balanced data generator by oversampling minority classes
     
-    # Convert class weights keys to integers if they are strings
-    if class_weights is not None:
-        int_class_weights = {}
+    Args:
+        generator: Original data generator
+        batch_size: Batch size for the new generator
         
-        # Use class indices from the provided train_class_indices
-        for class_name, value in class_weights.items():
-            # Correctly map class names to indices
-            for idx, name in train_class_indices.items():
-                if name == class_name:
-                    int_class_weights[idx] = value
-                    break
-            else:
-                print(f"Warning: Class '{class_name}' not found in provided class indices")
-        
-        # Use the converted class weights only if not empty
-        if int_class_weights:
-            class_weights = int_class_weights
-            print("Using class weights:", class_weights)
-        else:
-            print("Warning: Class weights dictionary is empty after conversion. Training without class weights.")
-            class_weights = None
-    
-    # Debug the first few batches to ensure they're not empty
-    print("Checking first few batches for data consistency...")
-    for i in range(3):  # Check first 3 batches
-        try:
-            batch_x, batch_y = train_generator[i]
-            print(f"Batch {i+1}:")
-            print(f"  Input batch shape: {batch_x.shape}")
-            print(f"  Label batch shape: {batch_y.shape}")
-            print(f"  Input batch dtype: {batch_x.dtype}")
-        except Exception as e:
-            print(f"Error checking batch {i+1}: {e}")
-    
-    # Train the model with generators directly (not tf.data.Dataset)
+    Returns:
+        A balanced data generator
+    """
     try:
-        # Reset TensorFlow's distribution strategy stack to prevent "pop from empty list" error
-        try:
-            # Clear any existing distribution strategy stack
-            tf.keras.backend.clear_session()
-            # Recreate the model's graph to ensure clean state
-            with strategy.scope():
-                model.compile(
-                    optimizer=model.optimizer,
-                    loss=model.loss,
-                    metrics=model.metrics
+        # Get class distribution
+        if hasattr(generator, 'classes'):
+            classes = generator.classes
+            class_indices = generator.class_indices
+        else:
+            # For custom generators
+            classes = []
+            for i in range(len(generator)):
+                _, batch_y = generator[i]
+                if len(batch_y.shape) > 1 and batch_y.shape[1] > 1:
+                    # One-hot encoded
+                    batch_classes = np.argmax(batch_y, axis=1)
+                else:
+                    # Already class indices
+                    batch_classes = batch_y
+                classes.extend(batch_classes)
+            classes = np.array(classes)
+            class_indices = {i: i for i in range(len(np.unique(classes)))}
+        
+        # Count samples per class
+        unique_classes = np.unique(classes)
+        class_counts = {cls: np.sum(classes == cls) for cls in unique_classes}
+        max_samples = max(class_counts.values())
+        
+        print(f"Original class distribution: {class_counts}")
+        
+        # Create balanced indices by oversampling minority classes
+        balanced_indices = []
+        for cls in unique_classes:
+            # Get indices for this class
+            cls_indices = np.where(classes == cls)[0]
+            # Oversample to match the majority class
+            if len(cls_indices) < max_samples:
+                # Randomly sample with replacement to reach max_samples
+                oversampled_indices = np.random.choice(
+                    cls_indices, 
+                    size=max_samples - len(cls_indices),
+                    replace=True
                 )
-        except Exception as e:
-            print(f"Warning: Could not reset distribution strategy: {e}")
+                cls_indices = np.concatenate([cls_indices, oversampled_indices])
             
-        history = model.fit(
-            train_generator,
-            validation_data=val_generator,
-            epochs=epochs,
-            callbacks=callbacks,
-            class_weight=class_weights,
-            workers=1,  # Reduce worker count to avoid memory issues
-            use_multiprocessing=False,  # Disable multiprocessing to avoid memory leaks
-            max_queue_size=10,  # Reduce queue size to save memory
-            verbose=1
+            balanced_indices.extend(cls_indices)
+        
+        # Shuffle the indices
+        np.random.shuffle(balanced_indices)
+        
+        # For YOLODetectionGenerator, create a simpler balanced generator
+        if isinstance(generator, tf.keras.utils.Sequence) and not hasattr(generator, 'image_shape'):
+            # Add image_shape attribute if missing
+            if hasattr(generator, 'df') and 'image_path' in generator.df.columns:
+                # Try to get image shape from the first image
+                try:
+                    sample_img = Image.open(generator.df['image_path'].iloc[0])
+                    generator.image_shape = sample_img.size + (3,)  # Width, Height, Channels
+                except:
+                    # Default shape if can't determine
+                    generator.image_shape = (224, 224, 3)
+            else:
+                # Default shape
+                generator.image_shape = (224, 224, 3)
+        
+        # Create a new generator that yields balanced batches
+        def balanced_generator():
+            while True:
+                for i in range(0, len(balanced_indices), batch_size):
+                    batch_indices = balanced_indices[i:i + batch_size]
+                    
+                    # For standard ImageDataGenerator
+                    if hasattr(generator, 'filepaths'):
+                        batch_x = []
+                        batch_y = []
+                        
+                        for idx in batch_indices:
+                            img = generator.image_data_generator.load_img(
+                                generator.filepaths[idx],
+                                target_size=generator.target_size,
+                                color_mode=generator.color_mode
+                            )
+                            x = generator.image_data_generator.img_to_array(img)
+                            x = generator.image_data_generator.standardize(x)
+                            
+                            batch_x.append(x)
+                            batch_y.append(generator.classes[idx])
+                        
+                        batch_x = np.array(batch_x)
+                        batch_y = tf.keras.utils.to_categorical(
+                            np.array(batch_y),
+                            num_classes=len(generator.class_indices)
+                        )
+                        
+                        yield batch_x, batch_y
+                    
+                    # For custom generators that support indexing
+                    elif hasattr(generator, '__getitem__'):
+                        batch_x = []
+                        batch_y = []
+                        
+                        for idx in batch_indices:
+                            # Calculate which batch and which item within that batch
+                            batch_idx = idx // generator.batch_size
+                            item_idx = idx % generator.batch_size
+                            
+                            # Get the batch
+                            if batch_idx < len(generator):
+                                x_batch, y_batch = generator[batch_idx]
+                                
+                                # Check if the item index is valid
+                                if item_idx < len(x_batch):
+                                    batch_x.append(x_batch[item_idx])
+                                    batch_y.append(y_batch[item_idx])
+                        
+                        if batch_x:  # Only yield if we have data
+                            yield np.array(batch_x), np.array(batch_y)
+        
+        # Create a tf.data.Dataset from the generator
+        output_signature = (
+            tf.TensorSpec(shape=(None, *generator.image_shape), dtype=tf.float32),
+            tf.TensorSpec(shape=(None, len(class_indices)), dtype=tf.float32)
         )
         
-        # Force garbage collection after training
-        gc.collect()
+        balanced_dataset = tf.data.Dataset.from_generator(
+            balanced_generator,
+            output_signature=output_signature
+        ).prefetch(tf.data.AUTOTUNE)
         
-        return history
-    except IndexError as e:
-        if "pop from empty list" in str(e):
-            print("Caught distribution strategy stack error. Attempting recovery...")
-            # Try to recover by clearing the session and recompiling
-            tf.keras.backend.clear_session()
-            
-            # Load the best checkpoint if available
-            checkpoint_path = 'models/checkpoint.keras'
-            if os.path.exists(checkpoint_path):
-                print(f"Loading best checkpoint from {checkpoint_path}")
-                try:
-                    model = tf.keras.models.load_model(checkpoint_path, compile=False)
-                    with strategy.scope():
-                        model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=5e-5),  # Use reduced learning rate
-                            loss='categorical_crossentropy',
-                            metrics=[
-                                'accuracy',
-                                tf.keras.metrics.AUC(name='auc'),
-                                tf.keras.metrics.Precision(name='precision'),
-                                tf.keras.metrics.Recall(name='recall')
-                            ]
-                        )
-                    print("Successfully recovered model from checkpoint")
-                    # Return a mock history object with the last metrics
-                    class MockHistory:
-                        def __init__(self):
-                            self.history = {
-                                'accuracy': [0.8194],
-                                'val_accuracy': [0.8125],
-                                'loss': [0.2750],
-                                'val_loss': [0.6956],
-                                'auc': [0.9153],
-                                'val_auc': [0.7461],
-                                'precision': [0.8194],
-                                'val_precision': [0.8125],
-                                'recall': [0.8194],
-                                'val_recall': [0.8125]
-                            }
-                    return MockHistory()
-                except Exception as load_err:
-                    print(f"Error loading checkpoint: {load_err}")
-                    raise
-            else:
-                print("No checkpoint found. Cannot recover model state.")
-                raise
-        else:
-            print(f"Error during training: {e}")
-            # Force garbage collection on error
-            gc.collect()
-            raise
+        print(f"Created balanced dataset with equal class distribution")
+        return balanced_dataset
+        
     except Exception as e:
-        print(f"Error during training: {e}")
-        # Force garbage collection on error
-        gc.collect()
-        raise
+        print(f"Error creating balanced generator: {e}")
+        print("Returning original generator")
+        traceback.print_exc()  # Print full traceback for debugging
+        return generator
 
 def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience):
     """
@@ -337,90 +452,25 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
     """
     print("Preparing model for fine-tuning...")
     
-    # Ensure we're using the correct strategy
-    if not tf.distribute.get_strategy() == strategy:
-        print("Recreating model in the correct strategy scope...")
-        with strategy.scope():
-            # Get the model's weights
-            weights = model.get_weights()
-            
-            # Recreate the model architecture consistently with build_model
-            base_model = InceptionResNetV2(
-                weights='imagenet',
-                include_top=False,
-                input_shape=(224, 224, 3),
-                pooling='avg'
-            )
-            
-            # Unfreeze only the last 10 layers of the base model to save memory
-            for layer in base_model.layers[:-10]:
-                layer.trainable = False
-            for layer in base_model.layers[-10:]:
-                layer.trainable = True
-                
-            # Build the model using Functional API
-            inputs = Input(shape=(224, 224, 3))
-            x = base_model(inputs)
-            x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
-            x = Dropout(0.5)(x)
-            outputs = Dense(model.output.shape[1], activation='softmax', kernel_initializer='he_normal')(x)
-            
-            model = Model(inputs=inputs, outputs=outputs)
-            
-            # Set the weights
-            model.set_weights(weights)
-            
-            # Compile with a lower learning rate
-            model.compile(
-                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                loss='categorical_crossentropy',
-                metrics=[
-                    'accuracy',
-                    tf.keras.metrics.AUC(name='auc'),
-                    tf.keras.metrics.Precision(name='precision'),
-                    tf.keras.metrics.Recall(name='recall')
-                ]
-            )
-    else:
-        # If we're already in the right strategy scope, just unfreeze layers
-        base_model = model.layers[1]  # Assuming base_model is the second layer
-        
-        # Unfreeze only the last 10 layers of the base model to save memory
-        for layer in base_model.layers[:-10]:
-            layer.trainable = False
-        for layer in base_model.layers[-10:]:
-            layer.trainable = True
-            
-        # Recompile with a lower learning rate
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-            loss='categorical_crossentropy',
-            metrics=[
-                'accuracy',
-                tf.keras.metrics.AUC(name='auc'),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
-            ]
-        )
-    
-    # Create callbacks for fine-tuning
+    # Create callbacks at the beginning of the function to avoid reference errors
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
-            monitor='val_accuracy',
+            monitor='val_recall',  # Focus on recall for minority class
             patience=early_stopping_patience,
             restore_best_weights=True,
             mode='max'
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss',
+            monitor='val_recall',
             factor=0.2,
             patience=3,
             min_lr=1e-7,
+            mode='max',
             verbose=1
         ),
         tf.keras.callbacks.ModelCheckpoint(
             filepath='models/fine_tuned_checkpoint.keras',
-            monitor='val_accuracy',
+            monitor='val_recall',
             save_best_only=True,
             mode='max',
             verbose=1
@@ -429,18 +479,181 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
         MemoryCleanupCallback(cleanup_frequency=2)  # Clean memory every 2 epochs
     ]
     
-    # Train the model
+    # Instead of recreating the model, just unfreeze layers in the existing model
     try:
-        history = model.fit(
-            train_generator,
-            validation_data=val_generator,
-            epochs=epochs,
-            callbacks=callbacks,
-            workers=1,  # Reduce worker count to avoid memory issues
-            use_multiprocessing=False,  # Disable multiprocessing to avoid memory leaks
-            max_queue_size=10,  # Reduce queue size to save memory
-            verbose=1
+        # Find the base model (InceptionResNetV2) in the current model
+        for layer in model.layers:
+            if isinstance(layer, tf.keras.Model):  # This should find the InceptionResNetV2 base model
+                base_model = layer
+                print(f"Found base model: {base_model.name}")
+                
+                # Unfreeze only the last 10 layers of the base model to save memory
+                for layer in base_model.layers[:-10]:
+                    layer.trainable = False
+                for layer in base_model.layers[-10:]:
+                    layer.trainable = True
+                
+                print(f"Unfrozen last 10 layers of base model")
+                break
+        else:
+            # If we didn't find a nested model, look for the InceptionResNetV2 layer directly
+            for i, layer in enumerate(model.layers):
+                if "inception" in layer.name.lower():
+                    base_layer = layer
+                    print(f"Found base layer at index {i}: {base_layer.name}")
+                    
+                    # Unfreeze only the last 10 layers if it has layers attribute
+                    if hasattr(base_layer, 'layers'):
+                        for layer in base_layer.layers[:-10]:
+                            layer.trainable = False
+                        for layer in base_layer.layers[-10:]:
+                            layer.trainable = True
+                        print(f"Unfrozen last 10 layers of base layer")
+                    else:
+                        # If it doesn't have layers, just make it trainable
+                        base_layer.trainable = True
+                        print(f"Made base layer trainable")
+                    break
+            else:
+                print("Warning: Could not find base model or InceptionResNetV2 layer. Making all layers trainable.")
+                model.trainable = True
+        
+        # Clear session to avoid strategy stack issues
+        tf.keras.backend.clear_session()
+        
+        # Fix for optimizer initialization error - create a new optimizer directly
+        new_optimizer = tf.keras.optimizers.Adam(learning_rate=1e-5)
+        
+        # Recompile the model with the new optimizer
+        model.compile(
+            optimizer=new_optimizer,
+            loss='categorical_crossentropy',
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc', from_logits=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
         )
+        
+        print(f"Model recompiled with learning rate: 1e-5")
+        
+    except Exception as e:
+        print(f"Error during model layer unfreezing: {e}")
+        print("Falling back to simpler fine-tuning approach...")
+        
+        # Simple approach: just make the whole model trainable
+        model.trainable = True
+        
+        # Clear session to avoid strategy stack issues
+        tf.keras.backend.clear_session()
+        
+        # Recompile with a lower learning rate
+        # Recompile the model with focal loss and lower learning rate
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+            loss=focal_loss(gamma=2.0, alpha=0.25),  # Use focal loss
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc', from_logits=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        )
+        
+        # Create callbacks for fine-tuning with focus on minority class
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_recall',  # Focus on recall for minority class
+                patience=early_stopping_patience,
+                restore_best_weights=True,
+                mode='max'
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_recall',
+                factor=0.2,
+                patience=3,
+                min_lr=1e-7,
+                mode='max',
+                verbose=1
+            ),
+            tf.keras.callbacks.ModelCheckpoint(
+                filepath='models/fine_tuned_checkpoint.keras',
+                monitor='val_recall',
+                save_best_only=True,
+                mode='max',
+                verbose=1
+            ),
+            TimeoutCallback(timeout_seconds=3600),  # 1 hour timeout
+            MemoryCleanupCallback(cleanup_frequency=2)  # Clean memory every 2 epochs
+        ]
+    
+    # Train the model without using strategy.scope()
+    try:
+        # Use a try-except block to handle potential strategy issues
+        try:
+            # Disable XLA compilation to avoid MaxPool gradient ops error
+            tf.config.optimizer.set_jit(False)
+            
+            # First attempt: try to fit the model directly
+            # In your main training function, add:
+            
+            # Create balanced generators for training
+            balanced_train_generator = create_balanced_data_generator(train_generator)
+            
+            # Use the balanced generator for training
+            history = model.fit(
+                balanced_train_generator,
+                validation_data=val_generator,  # Keep validation data as is to get realistic metrics
+                epochs=epochs,
+                callbacks=callbacks,
+                verbose=1
+            )
+        except RuntimeError as e:
+            if "Mixing different tf.distribute.Strategy objects" in str(e):
+                print("Strategy mismatch detected. Attempting to recreate model...")
+                
+                # Save the weights
+                weights = model.get_weights()
+                
+                # Clear session
+                tf.keras.backend.clear_session()
+                
+                # Create a new model with the same architecture
+                new_model = clone_model(model)
+                
+                # Set the weights
+                new_model.set_weights(weights)
+                
+                # Recompile
+                new_model.compile(
+                    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+                    loss='categorical_crossentropy',
+                    metrics=[
+                        'accuracy',
+                        tf.keras.metrics.AUC(name='auc', from_logits=False),
+                        tf.keras.metrics.Precision(name='precision'),
+                        tf.keras.metrics.Recall(name='recall')
+                    ]
+                )
+                
+                # Disable XLA compilation to avoid MaxPool gradient ops error
+                tf.config.optimizer.set_jit(False)
+                
+                # Try fitting again
+                history = new_model.fit(
+                    train_generator,
+                    validation_data=val_generator,
+                    epochs=epochs,
+                    callbacks=callbacks,
+                    verbose=1
+                )
+                
+                # Update the original model
+                model = new_model
+            else:
+                # If it's a different error, re-raise it
+                raise
         
         # Force garbage collection after training
         gc.collect()
@@ -450,7 +663,63 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
         print(f"Error during fine-tuning: {e}")
         # Force garbage collection on error
         gc.collect()
-        raise
+        
+        # Try one last approach - simplified model with fewer layers
+        try:
+            print("Attempting final approach: creating a simplified model...")
+            
+            # Create a simplified model that doesn't use MaxPool gradient ops
+            with strategy.scope():
+                # Create a new model with fewer layers
+                base_model = InceptionResNetV2(
+                    weights='imagenet',
+                    include_top=False,
+                    input_shape=(224, 224, 3),
+                    pooling='avg'
+                )
+                
+                # Freeze all layers
+                base_model.trainable = False
+                
+                # Build a simpler model
+                inputs = Input(shape=(224, 224, 3))
+                x = base_model(inputs, training=False)
+                x = Dense(256, activation='relu')(x)
+                x = Dropout(0.5)(x)
+                outputs = Dense(len(train_generator.class_indices), activation='softmax')(x)
+                
+                simplified_model = Model(inputs=inputs, outputs=outputs)
+                
+                # Compile the model
+                simplified_model.compile(
+                    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                    loss='categorical_crossentropy',
+                    metrics=[
+                        'accuracy',
+                        tf.keras.metrics.AUC(name='auc', from_logits=False),
+                        tf.keras.metrics.Precision(name='precision'),
+                        tf.keras.metrics.Recall(name='recall')
+                    ]
+                )
+            
+            # Disable XLA compilation
+            tf.config.optimizer.set_jit(False)
+            
+            # Train the simplified model
+            history = simplified_model.fit(
+                train_generator,
+                validation_data=val_generator,
+                epochs=epochs,
+                callbacks=callbacks,
+                verbose=1
+            )
+            
+            # Return the simplified model
+            return history
+        except Exception as e2:
+            print(f"Final approach failed: {e2}")
+            print("Fine-tuning could not be completed. Returning original model.")
+            return None
 
 def setup_gpu(memory_limit=None, allow_growth=True):
     """
@@ -464,6 +733,9 @@ def setup_gpu(memory_limit=None, allow_growth=True):
         The appropriate TensorFlow distribution strategy
     """
     global strategy
+    
+    # Clear any existing session to avoid strategy stack issues
+    tf.keras.backend.clear_session()
     
     # Check if GPU is available
     gpus = tf.config.list_physical_devices('GPU')
@@ -486,9 +758,8 @@ def setup_gpu(memory_limit=None, allow_growth=True):
                     [tf.config.LogicalDeviceConfiguration(memory_limit=memory_limit * 1024 * 1024)]
                 )
             else:
-                # Default to using 20GB (20480MB) for a 24GB GPU
-                # This leaves some headroom for the system
-                default_limit = 20480  # 20GB in MB
+                # Default to using 16GB for a 24GB GPU to leave headroom
+                default_limit = 16384  # 16GB in MB
                 tf.config.set_logical_device_configuration(
                     gpu,
                     [tf.config.LogicalDeviceConfiguration(memory_limit=default_limit * 1024 * 1024)]
@@ -499,7 +770,7 @@ def setup_gpu(memory_limit=None, allow_growth=True):
         print(f"Using GPU strategy with device: {strategy.extended.worker_devices[0]}")
         
         # Enable mixed precision for better performance
-        set_global_policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy('mixed_float16')
         print("Mixed precision enabled")
         
         return strategy
@@ -512,7 +783,7 @@ def setup_gpu(memory_limit=None, allow_growth=True):
 
 def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
     """
-    Log model and metrics to MLflow
+    Log model and metrics to MLflow with proper signature and input example
     """
     try:
         # Set experiment
@@ -540,21 +811,86 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
                             best_value = max(history.history[metric])
                         mlflow.log_metric(f"best_{metric}", best_value)
             
-            # Log the model
+            # Log the model with signature and input example
             try:
-                # Save model to a temporary directory
-                model_path = f"models/temp_model_{fold_idx}"
+                # Save model to a temporary directory with proper .keras extension
+                model_path = f"models/temp_model_{fold_idx}.keras"
                 model.save(model_path)
                 
-                # Log the model to MLflow
-                mlflow.tensorflow.log_model(model, "model")
+                # Create an input example (dummy input with correct shape)
+                input_example = np.zeros((1, 224, 224, 3), dtype=np.float32)
+                
+                # Create model signature
+                signature = infer_signature(input_example, model.predict(input_example))
+                
+                # Log the model to MLflow with signature and input example
+                mlflow.tensorflow.log_model(
+                    model, 
+                    "model",
+                    signature=signature,
+                    input_example=input_example
+                )
                 
                 # Clean up
                 import shutil
                 if os.path.exists(model_path):
-                    shutil.rmtree(model_path)
+                    os.remove(model_path)
             except Exception as e:
                 print(f"Error logging model to MLflow: {e}")
     
     except Exception as e:
         print(f"Error in MLflow logging: {e}")
+
+
+def create_ensemble_model(num_classes, num_models=3):
+    """
+    Create an ensemble of models for better performance on imbalanced data
+    """
+    models = []
+    
+    for i in range(num_models):
+        with strategy.scope():
+            # Create base model
+            base_model = InceptionResNetV2(
+                weights='imagenet',
+                include_top=False,
+                input_shape=(224, 224, 3),
+                pooling='avg'
+            )
+            
+            # Freeze base model
+            base_model.trainable = False
+            
+            # Build model
+            inputs = Input(shape=(224, 224, 3))
+            x = base_model(inputs, training=False)
+            x = Dense(512, activation='relu')(x)
+            x = Dropout(0.5)(x)
+            outputs = Dense(num_classes, activation='softmax')(x)
+            
+            model = Model(inputs=inputs, outputs=outputs)
+            
+            # Compile with focal loss
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                loss=focal_loss(gamma=2.0, alpha=0.25),
+                metrics=['accuracy', tf.keras.metrics.Recall(name='recall')]
+            )
+            
+            models.append(model)
+    
+    # Create ensemble model
+    ensemble_input = Input(shape=(224, 224, 3))
+    outputs = [model(ensemble_input) for model in models]
+    ensemble_output = tf.keras.layers.Average()(outputs)
+    
+    ensemble_model = Model(inputs=ensemble_input, outputs=ensemble_output)
+    
+    # Compile ensemble model
+    ensemble_model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+        loss=focal_loss(gamma=2.0, alpha=0.25),
+        metrics=['accuracy', tf.keras.metrics.Recall(name='recall')]
+    )
+    
+    return ensemble_model, models

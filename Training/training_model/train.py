@@ -81,7 +81,13 @@ def main():
     set_random_seeds(args.seed)
     
     # Configure GPU memory settings
-    strategy = setup_gpu(memory_limit=args.memory_limit)
+    print("Setting up GPU...")
+    tf_strategy = setup_gpu(memory_limit=args.memory_limit)
+    print(f"Using strategy: {tf_strategy}")
+    
+    # Make sure we clear any existing session before proceeding
+    tf.keras.backend.clear_session()
+    gc.collect()
     
     # Update model save path if provided
     model_save_path = MODEL_SAVE_PATH
@@ -117,73 +123,93 @@ def main():
     print("Building model...")
     model = build_peft_model(n_classes, multi_label=True)
     
+    if model is None:
+        print("Failed to build model. Exiting.")
+        return
+    
     # Print model summary
     model.summary()
     
     # Train the model
     print("Training model...")
-    history = train_model(
-        model,
-        train_generator,
-        val_generator,
-        epochs=args.epochs,
-        early_stopping_patience=args.early_stopping,
-        reduce_lr_patience=args.reduce_lr,
-        class_weights=class_weights,
-        learning_rate=args.learning_rate,
-        multi_label=True
-    )
-    
-    # Log initial model to MLflow
-    if args.log_to_mlflow:
-        log_model_to_mlflow(model, history, "skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
-    
-    # Fine-tune if requested
-    if args.fine_tune:
-        print("Fine-tuning model...")
-        fine_tune_history = fine_tune_model(
+    try:
+        history = train_model(
             model,
             train_generator,
             val_generator,
-            epochs=args.fine_tune_epochs,
-            early_stopping_patience=args.early_stopping,
+            args.epochs,
+            args.early_stopping,
+            args.reduce_lr,
+            class_weights,
+            args.learning_rate,
             multi_label=True,
-            class_weights=class_weights
+            batch_size=args.batch_size
         )
         
-        history = fine_tune_history
+        # Save the model
+        try:
+            model.save(model_save_path)
+            print(f"Model saved to {model_save_path}")
+        except Exception as save_error:
+            print(f"Error saving model: {save_error}")
+            traceback.print_exc()
         
+        # Log initial model to MLflow
         if args.log_to_mlflow:
-            log_model_to_mlflow(model, fine_tune_history, "fine_tuned_skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
+            try:
+                log_model_to_mlflow(model, history, "skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
+            except Exception as mlflow_error:
+                print(f"Error logging to MLflow: {mlflow_error}")
+        
+        # Fine-tune if requested
+        if args.fine_tune:
+            print("Fine-tuning model...")
+            try:
+                fine_tune_history = fine_tune_model(
+                    model,
+                    train_generator,
+                    val_generator,
+                    args.fine_tune_epochs,
+                    args.early_stopping,
+                    multi_label=True,
+                    class_weights=class_weights,
+                    batch_size=args.batch_size
+                )
+                
+                history = fine_tune_history
+                
+                # Save the fine-tuned model
+                try:
+                    model.save(model_save_path.replace('.keras', '_fine_tuned.keras'))
+                    print(f"Fine-tuned model saved")
+                except Exception as save_error:
+                    print(f"Error saving fine-tuned model: {save_error}")
+                
+                if args.log_to_mlflow:
+                    try:
+                        log_model_to_mlflow(model, fine_tune_history, "fine_tuned_skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
+                    except Exception as mlflow_error:
+                        print(f"Error logging fine-tuned model to MLflow: {mlflow_error}")
+            except Exception as fine_tune_error:
+                print(f"Error during fine-tuning: {fine_tune_error}")
+                traceback.print_exc()
+        
+        # Evaluate the model
+        print("Evaluating model...")
+        try:
+            evaluate_model(model, val_generator, diagnosis_to_idx)
+        except Exception as eval_error:
+            print(f"Error during evaluation: {eval_error}")
+            traceback.print_exc()
+            
+    except Exception as training_error:
+        print(f"Error in main training process: {training_error}")
+        traceback.print_exc()
     
-    # Evaluate the model
-    print("\n===== Model Evaluation =====")
-    evaluation_metrics = evaluate_model(model, val_generator, multi_label=True)
-    
-    # Log evaluation metrics to MLflow
-    if args.log_to_mlflow:
-        with mlflow.start_run(run_name=f"evaluation_fold_{args.fold_idx}"):
-            for metric_name, metric_value in evaluation_metrics.items():
-                mlflow.log_metric(metric_name, metric_value)
-    
-    # Save the model
-    model_path = f"models/model_fold_{args.fold_idx}.keras"
-    model.save(model_path)
-    print(f"Model saved to {model_path}")
-    
-    model.save(model_save_path)
-    print(f"Model also saved to {model_save_path}")
-    
-    if args.fine_tune:
-        fine_tuned_model_path = f"models/fine_tuned_model_fold_{args.fold_idx}.keras"
-        model.save(fine_tuned_model_path)
-        print(f"Fine-tuned model saved to {fine_tuned_model_path}")
-    
-    # Clean up
-    gc.collect()
+    # Clean up to prevent memory leaks
     tf.keras.backend.clear_session()
-    
-    print("Training, evaluation, and saving completed successfully!")
+    gc.collect()
+    print("Training completed.")
 
 if __name__ == "__main__":
     try:

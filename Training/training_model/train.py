@@ -134,6 +134,11 @@ def main():
         print(f"Using build_peft_model without metadata")
         model = build_peft_model(num_classes=len(class_indices))
     
+    # Print model summary to see architecture and parameter counts
+    print("\nModel Summary:")
+    model.summary()
+    print("\n")
+    
     # Train the model - pass additional parameters
     try:
         # Convert YOLODetectionGenerator to a format that Keras can understand
@@ -144,33 +149,104 @@ def main():
             def generator_wrapper(generator, batch_size):
                 def gen_fn():
                     for i in range(len(generator)):
-                        batch = generator[i]
-                        # YOLODetectionGenerator returns ([images, metadata], labels)
-                        yield batch
+                        try:
+                            batch = generator[i]
+                            # Check the actual structure of the batch
+                            if isinstance(model.input, list):
+                                # For models with metadata input
+                                # Ensure the batch has the expected structure
+                                if isinstance(batch, tuple) and len(batch) == 2:
+                                    inputs, labels = batch
+                                    if isinstance(inputs, list) and len(inputs) == 2:
+                                        # Correct structure: ([images, metadata], labels)
+                                        yield inputs, labels
+                                    else:
+                                        # Need to restructure
+                                        print(f"Restructuring batch {i} for metadata model")
+                                        images = inputs[0] if isinstance(inputs, list) else inputs
+                                        metadata = generator.get_metadata_for_batch(i)
+                                        yield [images, metadata], labels
+                                else:
+                                    # Completely wrong structure, try to fix
+                                    print(f"Incorrect batch structure in batch {i}, attempting to fix")
+                                    images = generator.get_images_for_batch(i)
+                                    metadata = generator.get_metadata_for_batch(i)
+                                    labels = generator.get_labels_for_batch(i)
+                                    yield [images, metadata], labels
+                            else:
+                                # For models without metadata
+                                if isinstance(batch, tuple) and len(batch) == 2:
+                                    inputs, labels = batch
+                                    if isinstance(inputs, list):
+                                        # Extract just the images from [images, metadata]
+                                        yield inputs[0], labels
+                                    else:
+                                        # Already in correct format
+                                        yield inputs, labels
+                                else:
+                                    # Try to fix incorrect structure
+                                    print(f"Incorrect batch structure in batch {i}, attempting to fix")
+                                    images = generator.get_images_for_batch(i)
+                                    labels = generator.get_labels_for_batch(i)
+                                    yield images, labels
+                        except Exception as e:
+                            print(f"Error processing batch {i}: {e}")
+                            # Skip this batch
+                            continue
                 
-                # Create dataset from generator
+                # Get a sample batch to determine shapes
+                sample_batch = generator[0]
+                
+                # Create dataset with appropriate output signature
                 if isinstance(model.input, list):
                     # For models with metadata input
-                    sample_batch = generator[0]
-                    dataset = tf.data.Dataset.from_generator(
-                        gen_fn,
-                        output_signature=(
-                            (
-                                tf.TensorSpec(shape=(batch_size, 224, 224, 3), dtype=tf.float32),
-                                tf.TensorSpec(shape=(batch_size, generator.metadata_dim), dtype=tf.float32)
-                            ),
-                            tf.TensorSpec(shape=(batch_size, len(class_indices)), dtype=tf.float32)
-                        )
+                    # Determine shapes from the sample batch
+                    if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
+                        inputs, labels = sample_batch
+                        if isinstance(inputs, list) and len(inputs) == 2:
+                            images_shape = inputs[0].shape
+                            metadata_shape = inputs[1].shape
+                        else:
+                            # Fallback to expected shapes
+                            images_shape = (batch_size, 224, 224, 3)
+                            metadata_shape = (batch_size, generator.metadata_dim)
+                    else:
+                        # Fallback to expected shapes
+                        images_shape = (batch_size, 224, 224, 3)
+                        metadata_shape = (batch_size, generator.metadata_dim)
+                    
+                    # Create output signature for metadata model
+                    output_signature = (
+                        (
+                            tf.TensorSpec(shape=images_shape, dtype=tf.float32),
+                            tf.TensorSpec(shape=metadata_shape, dtype=tf.float32)
+                        ),
+                        tf.TensorSpec(shape=(batch_size, len(class_indices)), dtype=tf.float32)
                     )
                 else:
-                    # For models without metadata input
-                    dataset = tf.data.Dataset.from_generator(
-                        gen_fn,
-                        output_signature=(
-                            tf.TensorSpec(shape=(batch_size, 224, 224, 3), dtype=tf.float32),
-                            tf.TensorSpec(shape=(batch_size, len(class_indices)), dtype=tf.float32)
-                        )
+                    # For models without metadata
+                    # Determine shape from sample batch
+                    if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
+                        inputs, labels = sample_batch
+                        if isinstance(inputs, list):
+                            images_shape = inputs[0].shape
+                        else:
+                            images_shape = inputs.shape
+                    else:
+                        # Fallback to expected shape
+                        images_shape = (batch_size, 224, 224, 3)
+                    
+                    # Create output signature for image-only model
+                    output_signature = (
+                        tf.TensorSpec(shape=images_shape, dtype=tf.float32),
+                        tf.TensorSpec(shape=(batch_size, len(class_indices)), dtype=tf.float32)
                     )
+                
+                # Create and return the dataset with prefetching
+                dataset = tf.data.Dataset.from_generator(
+                    gen_fn,
+                    output_signature=output_signature
+                )
                 
                 return dataset.prefetch(tf.data.AUTOTUNE)
             

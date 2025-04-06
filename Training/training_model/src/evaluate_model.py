@@ -19,7 +19,7 @@ import json
 # Around line 16-20, keep the function signature
 def evaluate_model(model, val_generator):
     """
-    Evaluate the model and display results with enhanced AUC calculation
+    Evaluate the model and display results with comprehensive metrics
     Returns a dictionary of metrics for cross-validation analysis
     """
     # Get predictions
@@ -39,6 +39,7 @@ def evaluate_model(model, val_generator):
         # For tf.data.Dataset or generators that work with model.predict
         predictions = model.predict(val_generator, verbose=1)
         y_pred = np.argmax(predictions, axis=1)
+        y_pred_proba = predictions  # Keep probabilities for AUC calculation
         
         # Get true labels
         if hasattr(val_generator, 'classes'):
@@ -65,101 +66,113 @@ def evaluate_model(model, val_generator):
         min_len = min(len(y_true), len(y_pred))
         y_true = y_true[:min_len]
         y_pred = y_pred[:min_len]
-        predictions = predictions[:min_len]
+        y_pred_proba = y_pred_proba[:min_len]
         print(f"Adjusted to {min_len} samples for evaluation")
-    
-    # Print classification report
-    print("\nClassification Report:")
-    print("-" * 60)
     
     # Get class names if available
     if hasattr(val_generator, 'diagnosis_to_idx'):
-        idx_to_class = {v: k for k, v in val_generator.diagnosis_to_idx.items()}
-        target_names = [idx_to_class.get(i, f"Class {i}") for i in range(len(val_generator.diagnosis_to_idx))]
+        idx_to_diagnosis = {v: k for k, v in val_generator.diagnosis_to_idx.items()}
+        class_names = [idx_to_diagnosis.get(i, f"Class {i}") for i in range(len(val_generator.diagnosis_to_idx))]
+    elif hasattr(val_generator, 'class_indices'):
+        idx_to_class = {v: k for k, v in val_generator.class_indices.items()}
+        class_names = [idx_to_class.get(i, f"Class {i}") for i in range(len(val_generator.class_indices))]
     else:
-        target_names = [f"Class {i}" for i in range(np.max(y_true) + 1)]
+        # If class names are not available, use generic names
+        num_classes = predictions.shape[1] if len(predictions.shape) > 1 else 2
+        class_names = [f"Class {i}" for i in range(num_classes)]
     
-    # Print classification report
-    report = classification_report(y_true, y_pred, target_names=target_names, output_dict=True)
-    print(classification_report(y_true, y_pred, target_names=target_names))
+    # Calculate comprehensive metrics
+    metrics = {}
     
-    # Calculate and print macro-averaged metrics (better for imbalanced classes)
-    print("\nMacro-averaged Metrics (better for imbalanced classes):")
-    macro_precision = precision_score(y_true, y_pred, average='macro')
-    macro_recall = recall_score(y_true, y_pred, average='macro')
-    macro_f1 = f1_score(y_true, y_pred, average='macro')
+    # Overall accuracy
+    metrics['accuracy'] = accuracy_score(y_true, y_pred)
     
-    print(f"Macro Precision: {macro_precision:.2%}")
-    print(f"Macro Recall: {macro_recall:.2%}")
-    print(f"Macro F1 Score: {macro_f1:.2%}")
+    # Precision, Recall, F1 (macro-averaged)
+    metrics['precision_macro'] = precision_score(y_true, y_pred, average='macro', zero_division=0)
+    metrics['recall_macro'] = recall_score(y_true, y_pred, average='macro', zero_division=0)
+    metrics['f1_macro'] = f1_score(y_true, y_pred, average='macro', zero_division=0)
     
-    # Calculate validation metrics
-    accuracy = accuracy_score(y_true, y_pred)
+    # Precision, Recall, F1 (weighted-averaged)
+    metrics['precision_weighted'] = precision_score(y_true, y_pred, average='weighted', zero_division=0)
+    metrics['recall_weighted'] = recall_score(y_true, y_pred, average='weighted', zero_division=0)
+    metrics['f1_weighted'] = f1_score(y_true, y_pred, average='weighted', zero_division=0)
     
-    # Calculate weighted metrics
-    weighted_precision = precision_score(y_true, y_pred, average='weighted')
-    weighted_recall = recall_score(y_true, y_pred, average='weighted')
-    weighted_f1 = f1_score(y_true, y_pred, average='weighted')
+    # Sensitivity (same as recall) and Specificity (per class)
+    cm = confusion_matrix(y_true, y_pred)
     
-    # Calculate AUC for multi-class
-    # One-hot encode the true labels for ROC calculation
-    y_true_onehot = np.zeros((len(y_true), len(np.unique(y_true))))
-    for i, val in enumerate(y_true):
-        y_true_onehot[i, val] = 1
+    # Calculate per-class metrics
+    n_classes = len(class_names)
+    sensitivity_per_class = []
+    specificity_per_class = []
     
-    # Calculate AUC
+    for i in range(n_classes):
+        # True Positives, False Negatives, False Positives, True Negatives
+        tp = cm[i, i]
+        fn = np.sum(cm[i, :]) - tp
+        fp = np.sum(cm[:, i]) - tp
+        tn = np.sum(cm) - tp - fn - fp
+        
+        # Sensitivity (Recall) = TP / (TP + FN)
+        sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+        sensitivity_per_class.append(sensitivity)
+        
+        # Specificity = TN / (TN + FP)
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+        specificity_per_class.append(specificity)
+    
+    # Average sensitivity and specificity
+    metrics['sensitivity_macro'] = np.mean(sensitivity_per_class)
+    metrics['specificity_macro'] = np.mean(specificity_per_class)
+    
+    # ICBHI Score (average of sensitivity and specificity)
+    metrics['icbhi_score'] = (metrics['sensitivity_macro'] + metrics['specificity_macro']) / 2
+    
+    # AUC calculation (one-vs-rest for multiclass)
     try:
-        auc_value = roc_auc_score(y_true_onehot, predictions, multi_class='ovr')
+        # Convert true labels to one-hot encoding for AUC calculation
+        y_true_onehot = np.zeros((len(y_true), n_classes))
+        for i in range(len(y_true)):
+            y_true_onehot[i, y_true[i]] = 1
+        
+        # Calculate AUC for each class
+        auc_per_class = []
+        for i in range(n_classes):
+            if np.sum(y_true_onehot[:, i]) > 0:  # Only calculate if class exists in true labels
+                auc = roc_auc_score(y_true_onehot[:, i], y_pred_proba[:, i])
+                auc_per_class.append(auc)
+        
+        # Average AUC across all classes
+        metrics['auc_macro'] = np.mean(auc_per_class) if auc_per_class else 0
+        
+        # Weighted AUC
+        metrics['auc_weighted'] = roc_auc_score(y_true_onehot, y_pred_proba, average='weighted', multi_class='ovr')
     except Exception as e:
         print(f"Error calculating AUC: {e}")
-        auc_value = 0
+        metrics['auc_macro'] = 0
+        metrics['auc_weighted'] = 0
     
-    # Calculate specificity (true negative rate)
-    # For multi-class, we calculate specificity for each class and average
-    specificities = []
-    for cls in range(len(np.unique(y_true))):
-        # Create binary classification for this class
-        y_true_bin = (y_true == cls).astype(int)
-        y_pred_bin = (y_pred == cls).astype(int)
-        
-        # Calculate confusion matrix
-        tn, fp, fn, tp = confusion_matrix(y_true_bin, y_pred_bin, labels=[0, 1]).ravel()
-        
-        # Calculate specificity
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-        specificities.append(specificity)
+    # Get detailed classification report
+    report = classification_report(y_true, y_pred, target_names=class_names, output_dict=True)
+    metrics['class_report'] = report
     
-    # Average specificity
-    specificity = np.mean(specificities)
+    # Print summary of metrics
+    print("\nComprehensive Evaluation Metrics:")
+    print("-" * 60)
+    print(f"Accuracy: {metrics['accuracy']:.4f}")
+    print(f"Precision (Macro): {metrics['precision_macro']:.4f}")
+    print(f"Recall/Sensitivity (Macro): {metrics['recall_macro']:.4f}")
+    print(f"Specificity (Macro): {metrics['specificity_macro']:.4f}")
+    print(f"F1 Score (Macro): {metrics['f1_macro']:.4f}")
+    print(f"AUC (Macro): {metrics['auc_macro']:.4f}")
+    print(f"ICBHI Score: {metrics['icbhi_score']:.4f}")
+    print("-" * 60)
     
-    # Calculate ICBHI score (harmonic mean of sensitivity and specificity)
-    sensitivity = macro_recall  # Sensitivity is the same as recall
-    icbhi_score = 2 * sensitivity * specificity / (sensitivity + specificity) if (sensitivity + specificity) > 0 else 0
+    # Print confusion matrix
+    print("\nConfusion Matrix:")
+    print(cm)
     
-    # Print validation metrics
-    print("\nValidation Metrics:")
-    print(f"Validation Accuracy: {accuracy:.2%}")
-    print(f"Validation Precision: {weighted_precision:.2%}")
-    print(f"Validation Recall/Sensitivity: {sensitivity:.2%}")
-    print(f"Validation F1 Score: {weighted_f1:.2%}")
-    print(f"Validation AUC: {auc_value:.2%}")
-    print(f"Validation Specificity: {specificity:.2%}")
-    print(f"Validation ICBHI Score: {icbhi_score:.2%}")
-    
-    # Return metrics for cross-validation analysis
-    return {
-        'accuracy': accuracy,
-        'precision': weighted_precision,
-        'recall': sensitivity,
-        'f1': weighted_f1,
-        'auc': auc_value,
-        'specificity': specificity,
-        'icbhi_score': icbhi_score,
-        'macro_precision': macro_precision,
-        'macro_recall': macro_recall,
-        'macro_f1': macro_f1,
-        'class_report': report
-    }
+    # Return all metrics for further analysis
+    return metrics
 
 
 def save_model(model, save_path):

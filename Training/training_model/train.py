@@ -35,6 +35,8 @@ def main():
     parser = argparse.ArgumentParser(description='Train skin lesion classification model')
     parser.add_argument('--csv_path', type=str, default='data/ISIC_2019_Training_GroundTruth.csv',
                         help='Path to CSV file with image metadata')
+    parser.add_argument('--metadata_csv_path', type=str, default=None,
+                        help='Path to CSV file with patient metadata (age, sex, anatomical site)')
     parser.add_argument('--image_dir', type=str, default='data/exp',
                         help='Directory containing detected images')
     parser.add_argument('--labels_dir', type=str, default='data/exp/labels',
@@ -68,8 +70,17 @@ def main():
     parser.add_argument('--augmentation_strength', type=str, default='medium',
                         choices=['low', 'medium', 'high'],
                         help='Strength of data augmentation')
+    parser.add_argument('--use_metadata', action='store_true',
+                        help='Whether to use patient metadata (age, sex, anatomical site)')
+    parser.add_argument('--model_save_path', type=str, default=MODEL_SAVE_PATH,
+                        help='Path to save the trained model')
     
     args = parser.parse_args()
+    
+    # Update MODEL_SAVE_PATH if provided
+    global MODEL_SAVE_PATH
+    if args.model_save_path:
+        MODEL_SAVE_PATH = args.model_save_path
     
     # Set random seeds for reproducibility
     set_random_seeds(args.seed)
@@ -82,7 +93,8 @@ def main():
     dataset_stats = analyze_yolo_dataset(
         args.csv_path,
         args.image_dir,
-        args.labels_dir
+        args.labels_dir,
+        metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
     )
     
     # Create data generators
@@ -96,7 +108,8 @@ def main():
         n_folds=args.n_folds,
         fold_idx=args.fold_idx,
         seed=args.seed,
-        augmentation_strength=args.augmentation_strength
+        augmentation_strength=args.augmentation_strength,
+        metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
     )
     
     # Build the model with multi-label output
@@ -133,7 +146,8 @@ def main():
             val_generator,
             epochs=args.fine_tune_epochs,
             early_stopping_patience=args.early_stopping,
-            multi_label=True
+            multi_label=True,
+            class_weights=class_weights
         )
         
         history = fine_tune_history

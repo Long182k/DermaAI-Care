@@ -636,9 +636,10 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
         if not os.path.exists(label_path):
             continue
 
-        # Find the original image entry in the CSV
-        original_entry = df[df["image_name"] == img_name]
-
+        # Find the original entry in the CSV
+        # Change 'image_name' to 'image' to match the CSV column name
+        original_entry = df[df["image"] == img_name]
+        
         # Skip if no matching entry in CSV
         if len(original_entry) == 0:
             continue

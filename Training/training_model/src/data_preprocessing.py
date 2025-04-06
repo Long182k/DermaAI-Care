@@ -531,22 +531,42 @@ def create_yolo_generators(
     labels_dir,
     batch_size=16,
     min_samples_per_class=5,
-    n_folds=5,
     fold_idx=0,
+    n_folds=5,
     seed=42,
-    augmentation_strength='medium'
+    augmentation_strength='medium',
+    metadata_csv_path= "/kaggle/input/2019-isic-csv/ISIC_2019_Training_Metadata.csv"
 ):
     """
     Create train and validation generators for a specific fold using YOLO detected images
     Uses 4 folds for training (with augmentation) and 1 fold for testing (no modification)
+    
+    Args:
+        csv_path: Path to the ground truth CSV
+        image_dir: Directory containing the images
+        labels_dir: Directory containing YOLO labels
+        batch_size: Batch size for training
+        min_samples_per_class: Minimum samples required for a class to be included
+        fold_idx: Index of the fold to use for validation
+        n_folds: Number of folds for cross-validation
+        seed: Random seed for reproducibility
+        augmentation_strength: Strength of data augmentation ('light', 'medium', 'strong')
+        metadata_csv_path: Path to the metadata CSV file (optional)
+        
+    Returns:
+        Train generator, validation generator, and class indices
     """
-    df, fold_indices, diagnosis_to_idx = load_yolo_detections(
-        image_dir,
-        labels_dir,
-        csv_path,
-        min_samples_per_class=min_samples_per_class,
-        n_folds=n_folds,
-    )
+    # Load data with or without metadata
+    if metadata_csv_path:
+        df, fold_indices, diagnosis_to_idx = load_yolo_detections(
+            image_dir, labels_dir, csv_path, metadata_csv_path, min_samples_per_class, n_folds
+        )
+        print("Using metadata features for training")
+    else:
+        df, fold_indices, diagnosis_to_idx = load_yolo_detections(
+            image_dir, labels_dir, csv_path, None, min_samples_per_class, n_folds
+        )
+        print("Not using metadata features")
 
     # Get indices for all folds
     all_train_indices = []
@@ -588,19 +608,8 @@ def create_yolo_generators(
         memory_efficient=True
     )
 
-    # Access class indices before converting to dataset
-    train_class_indices = train_generator.class_indices
-
-    n_classes = len(diagnosis_to_idx)
-
-    return (
-        train_generator,
-        test_generator,
-        diagnosis_to_idx,
-        n_classes,
-        len(fold_indices),
-        train_class_indices,
-    )
+    # Return only what's expected in train.py
+    return train_generator, test_generator, diagnosis_to_idx
 
 
 def analyze_yolo_dataset(csv_path, image_dir, labels_dir):

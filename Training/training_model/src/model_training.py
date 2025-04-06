@@ -234,9 +234,23 @@ class MemoryCleanupCallback(Callback):
 # Update the train_model function signature
 def train_model(model, train_data, val_data, epochs, early_stopping_patience, reduce_lr_patience, 
                 class_weights, train_class_indices, use_datasets=False, 
-                class_weight_multiplier=2.0, use_focal_loss=False, learning_rate=0.0001):
+                class_weight_multiplier=3.0, use_focal_loss=True, learning_rate=0.0001):
     """
     Enhanced training function with proper memory management and early stopping
+    
+    Args:
+        model: The model to train
+        train_data: Training data generator or dataset
+        val_data: Validation data generator or dataset
+        epochs: Number of epochs to train
+        early_stopping_patience: Patience for early stopping
+        reduce_lr_patience: Patience for learning rate reduction
+        class_weights: Dictionary of class weights
+        train_class_indices: Dictionary mapping class names to indices
+        use_datasets: Whether train_data and val_data are tf.data.Dataset objects
+        class_weight_multiplier: Multiplier for minority class weights
+        use_focal_loss: Whether to use focal loss
+        learning_rate: Learning rate for optimizer
     """
     # Ensure class weights are properly applied
     print(f"Using class weights: {class_weights}")
@@ -445,9 +459,17 @@ def create_balanced_data_generator(generator, batch_size=32):
         traceback.print_exc()  # Print full traceback for debugging
         return generator
 
-def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience):
+def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience, learning_rate=1e-5):
     """
     Fine-tune the model by unfreezing some layers with early stopping and memory optimization
+    
+    Args:
+        model: The model to fine-tune
+        train_generator: Training data generator
+        val_generator: Validation data generator
+        epochs: Number of epochs for fine-tuning
+        early_stopping_patience: Patience for early stopping
+        learning_rate: Learning rate for fine-tuning (should be lower than initial training)
     """
     print("Preparing model for fine-tuning...")
     

@@ -41,17 +41,24 @@ def main():
     parser.add_argument('--fine_tune_epochs', type=int, default=10, help='Number of epochs for fine-tuning')
     parser.add_argument('--early_stopping', type=int, default=5, help='Patience for early stopping')
     parser.add_argument('--reduce_lr', type=int, default=3, help='Patience for learning rate reduction')
-    parser.add_argument('--fold', type=int, default=0, help='Fold index for cross-validation')
+    # Update fold parameter name to match your command
+    parser.add_argument('--fold_idx', type=int, default=0, help='Fold index for cross-validation')
+    parser.add_argument('--n_folds', type=int, default=5, help='Number of folds for cross-validation')
     parser.add_argument('--augmentation', type=str, default='medium', choices=['light', 'medium', 'strong'], 
                         help='Augmentation strength')
     parser.add_argument('--min_samples', type=int, default=5, help='Minimum samples per class')
-    parser.add_argument('--memory_limit', type=int, default=None, help='GPU memory limit in MB')
+    parser.add_argument('--memory_limit', type=int, default=14336, help='GPU memory limit in MB')
     parser.add_argument('--use_metadata', action='store_true', help='Whether to use metadata features')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    parser.add_argument('--class_weight_multiplier', type=float, default=3.0, 
+                        help='Multiplier for minority class weights')
+    parser.add_argument('--use_focal_loss', action='store_true', help='Whether to use focal loss')
+    parser.add_argument('--learning_rate', type=float, default=0.0001, help='Learning rate for optimizer')
     
     args = parser.parse_args()
     
     # Set random seeds for reproducibility
-    set_random_seeds(42)
+    set_random_seeds(args.seed)
     
     # Configure GPU
     strategy = setup_gpu(memory_limit=args.memory_limit)
@@ -65,16 +72,18 @@ def main():
     image_dir = "/kaggle/input/2019-isic/exp"
     labels_dir = "/kaggle/input/2019-isic/exp/labels"
     
-    # Create data generators with metadata
+    # Create data generators with metadata - update parameter names
     train_generator, val_generator, class_indices = create_yolo_generators(
         csv_path=csv_path,
         image_dir=image_dir,
         labels_dir=labels_dir,
-        metadata_csv_path=metadata_csv_path if args.use_metadata else None,
         batch_size=args.batch_size,
         min_samples_per_class=args.min_samples,
-        fold_idx=args.fold,
-        augmentation_strength=args.augmentation
+        fold_idx=args.fold_idx,  # Updated from args.fold
+        n_folds=args.n_folds,
+        seed=args.seed,
+        augmentation_strength=args.augmentation,
+        metadata_csv_path=metadata_csv_path if args.use_metadata else None,
     )
     
     # Analyze dataset to understand class distribution
@@ -98,7 +107,7 @@ def main():
     else:
         model = build_peft_model(num_classes=len(class_indices))
     
-    # Train the model
+    # Train the model - pass additional parameters
     history = train_model(
         model=model,
         train_data=train_generator,
@@ -108,8 +117,9 @@ def main():
         reduce_lr_patience=args.reduce_lr,
         class_weights=class_weight_dict,
         train_class_indices=class_indices,
-        class_weight_multiplier=3.0,  # Increase weight for minority classes
-        use_focal_loss=True
+        class_weight_multiplier=args.class_weight_multiplier,
+        use_focal_loss=args.use_focal_loss,
+        learning_rate=args.learning_rate
     )
     
     # Evaluate the model
@@ -140,7 +150,8 @@ def main():
             train_generator=train_generator,
             val_generator=val_generator,
             epochs=args.fine_tune_epochs,
-            early_stopping_patience=args.early_stopping
+            early_stopping_patience=args.early_stopping,
+            learning_rate=args.learning_rate / 10 
         )
         
         # Evaluate fine-tuned model

@@ -97,7 +97,8 @@ def main():
     )
     
     # Analyze dataset to understand class distribution
-    analyze_yolo_dataset(train_generator, val_generator)
+    # Fix: Call analyze_yolo_dataset with the correct parameters
+    analyze_yolo_dataset(args.csv_path, args.image_dir, args.labels_dir)
     
     # Calculate class weights to handle imbalance
     class_weights = compute_class_weight(

@@ -6,11 +6,26 @@ import random
 import gc
 import mlflow
 
+# Configure GPU memory growth before any other GPU operations
+def set_memory_growth():
+    """Configure GPU to allow memory growth to prevent OOM errors"""
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            print(f"Memory growth enabled on {len(gpus)} GPU(s)")
+        except RuntimeError as e:
+            print(f"Error setting memory growth: {e}")
+
+# Call this function at the very beginning
+set_memory_growth()
+
 # Import custom modules
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
-from src.model_training import build_peft_model,build_peft_model_with_metadata, train_model, fine_tune_model, setup_gpu, log_model_to_mlflow, create_ensemble_model
-from src.evaluate_model import evaluate_model, save_metrics_to_json  # Add save_metrics_to_json
-from sklearn.utils.class_weight import compute_class_weight  # Add this missing import
+from src.model_training import build_peft_model, build_peft_model_with_metadata, train_model, fine_tune_model, setup_gpu, log_model_to_mlflow, create_ensemble_model
+from src.evaluate_model import evaluate_model, save_metrics_to_json
+from sklearn.utils.class_weight import compute_class_weight
 
 # Define model save paths
 MODEL_SAVE_PATH = "/kaggle/working/DermaAI-Care/Training/training_model/models/skin_cancer_prediction_model.keras"
@@ -116,6 +131,7 @@ def main():
         print(f"Using metadata with {metadata_dim} features")
         model = build_peft_model_with_metadata(num_classes=len(class_indices), metadata_dim=metadata_dim)
     else:
+        print(f"Using build_peft_model without metadata")
         model = build_peft_model(num_classes=len(class_indices))
     
     # Train the model - pass additional parameters
@@ -133,22 +149,31 @@ def main():
         learning_rate=args.learning_rate
     )
     
-    # Evaluate the model
-    metrics = evaluate_model(model, val_generator)
-    
-    # Save metrics to JSON file
-    save_metrics_to_json(metrics, f"metrics/base_model_fold_{args.fold_idx}.json")
+    # Check if training was successful
+    if history is not None:
+        # Evaluate the model
+        metrics = evaluate_model(model, val_generator)
+        
+        # Save metrics to JSON file
+        save_metrics_to_json(metrics, f"metrics/base_model_fold_{args.fold_idx}.json")
+    else:
+        print("Training failed. Saving empty metrics.")
+        save_metrics_to_json({"error": "Training failed"}, f"metrics/base_model_fold_{args.fold_idx}.json")
     
     # Save the model
-    model_path = f"models/model_fold_{args.fold_idx}.keras"
-    model.save(model_path)
+    try:
+        model_path = f"models/model_fold_{args.fold_idx}.keras"
+        model.save(model_path)
+        print(f"Model saved to {model_path}")
+    except Exception as e:
+        print(f"Error saving model: {e}")
     
     # Log model to MLflow with metadata information
     log_model_to_mlflow(
         model, 
         history, 
         "skin_lesion_classifier", 
-        args.fold_idx,  # Updated from args.fold
+        args.fold_idx,
         class_indices,
         metadata_used=args.use_metadata
     )

@@ -3,7 +3,7 @@ import glob
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from PIL import Image
+from PIL import Image, ImageEnhance
 from tensorflow.keras.preprocessing.image import img_to_array
 from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
 from sklearn.model_selection import StratifiedKFold

@@ -1,3 +1,88 @@
+# Modify the model compilation in build_peft_model function
+def build_peft_model(num_classes=9, r=8, alpha=32):
+    """
+    Build and compile the model with PEFT (LoRA) optimizations and memory efficiency
+    Adapted for 9-class skin lesion classification
+    """
+    # Enable mixed precision for faster training and lower memory usage
+    set_global_policy('mixed_float16')
+    
+    with strategy.scope():
+        # Create the base model with efficient memory usage
+        base_model = InceptionResNetV2(
+            weights='imagenet',
+            include_top=False,
+            input_shape=(224, 224, 3),
+            pooling='avg'
+        )
+        
+        # Freeze the base model
+        base_model.trainable = False
+        
+        # Build the model using Functional API
+        inputs = Input(shape=(224, 224, 3))
+        x = base_model(inputs, training=False)
+        
+        # Apply LoRA to the final dense layer
+        dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
+        dense_output = dense_layer(x)
+        
+        # Create LoRA adaptation layer using the r and alpha parameters
+        lora_layer = LoRALayer(
+            in_features=512,
+            out_features=512,
+            r=r,  # Using the r parameter
+            alpha=alpha,  # Using the alpha parameter
+            name='lora_adaptation'
+        )(dense_output)
+        
+        # Combine the original dense output with the LoRA adaptation
+        x = tf.keras.layers.Add()([dense_output, lora_layer])
+        
+        # Add dropout for regularization
+        x = Dropout(0.5)(x)
+        
+        # Final classification layer with 9 outputs
+        # MEL, NV, BCC, AK, BKL, DF, VASC, SCC, UNK
+        outputs = Dense(num_classes, activation='softmax', name='predictions')(x)
+        
+        model = Model(inputs=inputs, outputs=outputs)
+        
+        # Apply PEFT if available
+        if PEFT_AVAILABLE:
+            try:
+                # Configure LoRA for efficient fine-tuning
+                # Specify target_modules to fix the error
+                peft_config = LoraConfig(
+                    task_type=TaskType.SEQ_CLS,
+                    inference_mode=False,
+                    r=r,
+                    lora_alpha=alpha,
+                    lora_dropout=0.1,
+                    target_modules=["dense", "Dense"]  # Target dense layers for adaptation
+                )
+                model = get_peft_model(model, peft_config)
+                print("Applied PEFT (LoRA) to the model")
+            except Exception as e:
+                print(f"Error applying PEFT: {e}")
+                print("Using standard model without PEFT")
+        
+        # Compile with focal loss to address class imbalance
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss=focal_loss(gamma=2.0, alpha=0.25),
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc', from_logits=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        )
+        
+        return model
+
+
+# Modify the train_model function to better handle class imbalance
 def train_model(model, train_data, val_data, epochs, early_stopping_patience, reduce_lr_patience, 
                 class_weights, train_class_indices, use_datasets=False, 
                 class_weight_multiplier=3.0, use_focal_loss=True, learning_rate=0.0001):
@@ -119,48 +204,47 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
             
             # Check if we're dealing with a YOLODetectionGenerator
             if hasattr(train_data, '__class__') and 'YOLODetectionGenerator' in train_data.__class__.__name__:
-                print("Detected YOLODetectionGenerator. Converting to tf.data.Dataset")
+                print("Detected YOLODetectionGenerator. Using direct fit with generator")
                 
-                # Create a function to yield batches from the generator
-                def generator_fn():
-                    for i in range(len(train_data)):
-                        yield train_data[i]
-                
-                # Create a function to yield batches from validation generator
-                def val_generator_fn():
-                    for i in range(len(val_data)):
-                        yield val_data[i]
-                
-                # Determine output shapes and types from a sample batch
-                x_batch, y_batch = train_data[0]
-                
-                # Create tf.data.Dataset from the generator
-                train_dataset = tf.data.Dataset.from_generator(
-                    generator_fn,
-                    output_signature=(
-                        tf.TensorSpec(shape=(None,) + x_batch.shape[1:], dtype=tf.float32),
-                        tf.TensorSpec(shape=(None,) + y_batch.shape[1:], dtype=tf.float32)
+                # YOLODetectionGenerator returns [images, metadata], labels format
+                # Check if the model expects metadata
+                if isinstance(model.input, list) and len(model.input) > 1:
+                    print("Model accepts metadata input")
+                    # The generator already returns data in the correct format
+                    history = model.fit(
+                        train_data,
+                        validation_data=val_data,
+                        epochs=epochs,
+                        callbacks=callbacks,
+                        class_weight=class_weights if not use_focal_loss else None,
+                        verbose=1
                     )
-                ).prefetch(tf.data.AUTOTUNE)
-                
-                # Create validation dataset
-                val_dataset = tf.data.Dataset.from_generator(
-                    val_generator_fn,
-                    output_signature=(
-                        tf.TensorSpec(shape=(None,) + x_batch.shape[1:], dtype=tf.float32),
-                        tf.TensorSpec(shape=(None,) + y_batch.shape[1:], dtype=tf.float32)
+                else:
+                    print("Model does not accept metadata, using only images")
+                    # Create a wrapper generator that only returns images
+                    class ImageOnlyWrapper(tf.keras.utils.Sequence):
+                        def __init__(self, generator):
+                            self.generator = generator
+                        
+                        def __len__(self):
+                            return len(self.generator)
+                        
+                        def __getitem__(self, idx):
+                            [images, _], labels = self.generator[idx]
+                            return images, labels
+                    
+                    # Wrap the generators
+                    train_wrapper = ImageOnlyWrapper(train_data)
+                    val_wrapper = ImageOnlyWrapper(val_data)
+                    
+                    history = model.fit(
+                        train_wrapper,
+                        validation_data=val_wrapper,
+                        epochs=epochs,
+                        callbacks=callbacks,
+                        class_weight=class_weights if not use_focal_loss else None,
+                        verbose=1
                     )
-                ).prefetch(tf.data.AUTOTUNE)
-                
-                # Train with the datasets
-                history = model.fit(
-                    train_dataset,
-                    validation_data=val_dataset,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    class_weight=class_weights if not use_focal_loss else None,
-                    verbose=1
-                )
             # Check if we need to create a balanced generator
             elif hasattr(train_data, 'class_counts') and sum(train_data.class_counts.values()) > 0:
                 print("Creating balanced data generator for training")
@@ -199,6 +283,7 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
         return None
 
 
+
 def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices, metadata_used=False):
     """
     Log model and metrics to MLflow with proper signature and input example
@@ -212,6 +297,34 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices, met
         metadata_used: Whether metadata was used in the model
     """
     try:
+        # Check if history is None (training failed)
+        if history is None:
+            print("Training history is None, logging model without metrics")
+            
+            # Set experiment
+            mlflow.set_experiment("skin-lesion-classification")
+            
+            # Start a new run
+            with mlflow.start_run(run_name=f"{model_name}_fold_{fold_idx}"):
+                # Log parameters
+                mlflow.log_param("model_name", model_name)
+                mlflow.log_param("fold_idx", fold_idx)
+                mlflow.log_param("num_classes", len(class_indices))
+                mlflow.log_param("class_mapping", class_indices)
+                mlflow.log_param("metadata_used", metadata_used)
+                mlflow.log_param("training_status", "failed")
+                
+                # Log the model architecture as YAML
+                try:
+                    model_config = model.to_json()
+                    with open(f"models/model_architecture_{fold_idx}.json", "w") as f:
+                        f.write(model_config)
+                    mlflow.log_artifact(f"models/model_architecture_{fold_idx}.json")
+                except Exception as e:
+                    print(f"Error logging model architecture: {e}")
+            
+            return
+        
         # Set experiment
         mlflow.set_experiment("skin-lesion-classification")
         
@@ -222,7 +335,8 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices, met
             mlflow.log_param("fold_idx", fold_idx)
             mlflow.log_param("num_classes", len(class_indices))
             mlflow.log_param("class_mapping", class_indices)
-            mlflow.log_param("metadata_used", metadata_used)  # Log whether metadata was used
+            mlflow.log_param("metadata_used", metadata_used)
+            mlflow.log_param("training_status", "completed")
             
             # Log metrics
             for metric in ['accuracy', 'val_accuracy', 'loss', 'val_loss', 'auc', 'val_auc']:
@@ -251,14 +365,12 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices, met
                     metadata_dim = model.input[1].shape[1]
                     metadata_input = np.zeros((1, metadata_dim), dtype=np.float32)
                     input_example = [image_input, metadata_input]
-                    
-                    # Create model signature with the correct input format
-                    output = model.predict(input_example)
-                    signature = infer_signature(input_example, output)
                 else:
                     # For standard image-only models
                     input_example = np.zeros((1, 224, 224, 3), dtype=np.float32)
-                    signature = infer_signature(input_example, model.predict(input_example))
+                
+                # Create model signature
+                signature = infer_signature(input_example, model.predict(input_example))
                 
                 # Log the model to MLflow with signature and input example
                 mlflow.tensorflow.log_model(

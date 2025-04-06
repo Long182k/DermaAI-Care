@@ -211,81 +211,254 @@ def load_yolo_detections(
     image_dir, labels_dir, csv_path, min_samples_per_class=5, n_folds=5
 ):
     """
-    Load YOLO detected images and create cross-validation folds
+    Load YOLO detected images with their corresponding labels and ground truth
+    
+    Args:
+        image_dir: Directory containing the images
+        labels_dir: Directory containing YOLO labels
+        csv_path: Path to the ground truth CSV
+        min_samples_per_class: Minimum samples required for a class to be included
+        n_folds: Number of folds for cross-validation
+        
+    Returns:
+        DataFrame with image paths and labels, fold indices, and class mapping
     """
-    # Read the CSV file for diagnosis information
-    df = pd.read_csv(csv_path)
-
-    # Get all JPG images from the detection directory
-    image_files = glob.glob(os.path.join(image_dir, "*.jpg"))
-
-    # Create a new dataframe for detected images
-    detected_data = []
-
-    for img_path in image_files:
-        # Extract image name from path
-        img_name = os.path.basename(img_path).split(".")[0]
-
-        # Find corresponding label file
-        label_path = os.path.join(labels_dir, f"{img_name}.txt")
-
-        # Skip if label file doesn't exist
-        if not os.path.exists(label_path):
-            continue
-
-        # Find the original image entry in the CSV
-        original_entry = df[df["image_name"] == img_name]
-
-        # Skip if no matching entry in CSV
-        if len(original_entry) == 0:
-            continue
-
-        # Read the label file to get bounding box
-        with open(label_path, "r") as f:
-            label_content = f.read().strip().split()
-
-        # Parse label content (class x_center y_center width height confidence)
-        if len(label_content) >= 5:  # Ensure we have at least the basic bbox info
-            # Extract bounding box coordinates
-            bbox = [
-                float(label_content[1]),
-                float(label_content[2]),
-                float(label_content[3]),
-                float(label_content[4]),
-            ]
-
-            # Add to detected data
-            detected_data.append(
-                {
-                    "image_name": img_name,
-                    "image_path": img_path,
-                    "diagnosis": original_entry["diagnosis"].values[0],
-                    "benign_malignant": original_entry["benign_malignant"].values[0],
-                    "target": original_entry["target"].values[0],
-                    "bbox": bbox,
-                }
-            )
-
-    # Create dataframe from detected data
-    detected_df = pd.DataFrame(detected_data)
-
+    # Load ground truth data
+    gt_df = pd.read_csv(csv_path)
+    
+    # Get all image files from the directory
+    image_files = glob.glob(os.path.join(image_dir, "*.jpg")) + glob.glob(os.path.join(image_dir, "*.jpeg"))
+    image_names = [os.path.basename(f).split('.')[0] for f in image_files]
+    
+    # Create a dataframe with image paths
+    df = pd.DataFrame({
+        'image_name': image_names,
+        'image_path': image_files
+    })
+    
+    # Add label paths
+    df['label_path'] = df['image_name'].apply(lambda x: os.path.join(labels_dir, f"{x}.txt"))
+    
+    # Filter to only include images that have YOLO labels
+    df = df[df['label_path'].apply(os.path.exists)]
+    
+    # Merge with ground truth data
+    df['image'] = df['image_name']  # Create column to match with ground truth
+    df = pd.merge(df, gt_df, on='image', how='inner')
+    
+    # Create a diagnosis column based on the one-hot encoded columns
+    # The columns are: MEL, NV, BCC, AK, BKL, DF, VASC, SCC, UNK
+    diagnosis_columns = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC', 'UNK']
+    
+    # Convert to numeric diagnosis index (0-8)
+    df['diagnosis'] = df[diagnosis_columns].idxmax(axis=1)
+    
+    # Create a mapping from diagnosis name to index
+    diagnosis_to_idx = {name: idx for idx, name in enumerate(diagnosis_columns)}
+    
+    # Count samples per class
+    class_counts = df['diagnosis'].value_counts()
+    print(f"Class distribution before filtering: {class_counts}")
+    
     # Filter out classes with too few samples
-    class_counts = detected_df["diagnosis"].value_counts()
-    valid_classes = class_counts[class_counts >= min_samples_per_class].index
-    filtered_df = detected_df[detected_df["diagnosis"].isin(valid_classes)]
-
-    # Create diagnosis to index mapping
-    unique_diagnoses = filtered_df["diagnosis"].unique()
-    diagnosis_to_idx = {diagnosis: i for i, diagnosis in enumerate(unique_diagnoses)}
-
-    # Create stratified k-fold indices
+    valid_classes = class_counts[class_counts >= min_samples_per_class].index.tolist()
+    df = df[df['diagnosis'].isin(valid_classes)]
+    
+    # Update the mapping to only include valid classes
+    diagnosis_to_idx = {name: idx for idx, name in enumerate(diagnosis_columns) if name in valid_classes}
+    
+    # Create stratified folds
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     fold_indices = []
+    
+    for train_idx, val_idx in skf.split(df, df['diagnosis']):
+        fold_indices.append({
+            "train_idx": train_idx,
+            "val_idx": val_idx
+        })
+    
+    print(f"Created {n_folds} folds with stratification")
+    print(f"Final class mapping: {diagnosis_to_idx}")
+    print(f"Final dataset size: {len(df)} samples")
+    
+    return df, fold_indices, diagnosis_to_idx
 
-    for train_idx, val_idx in skf.split(filtered_df, filtered_df["diagnosis"]):
-        fold_indices.append({"train_idx": train_idx, "val_idx": val_idx})
-
-    return filtered_df, fold_indices, diagnosis_to_idx
+class YOLODetectionGenerator:
+    """
+    Custom generator for YOLO detected images with multi-class classification
+    """
+    def __init__(self, df, diagnosis_to_idx, batch_size=16, is_training=True, 
+                 seed=42, memory_efficient=True, augmentation_strength='medium'):
+        self.df = df
+        self.diagnosis_to_idx = diagnosis_to_idx
+        self.batch_size = batch_size
+        self.is_training = is_training
+        self.memory_efficient = memory_efficient
+        self.augmentation_strength = augmentation_strength
+        
+        # Extract diagnoses and image paths
+        self.diagnoses = df['diagnosis'].values
+        self.image_paths = df['image_path'].values
+        self.label_paths = df['label_path'].values
+        
+        # Number of classes is the number of unique diagnoses
+        self.num_classes = len(diagnosis_to_idx)
+        
+        # Set random seed
+        random.seed(seed)
+        np.random.seed(seed)
+        
+        # Calculate number of batches
+        self.n_samples = len(df)
+        self.indices = np.arange(self.n_samples)
+        self.steps_per_epoch = int(np.ceil(self.n_samples / self.batch_size))
+        
+        # Shuffle indices if training
+        if self.is_training:
+            np.random.shuffle(self.indices)
+    
+    def __len__(self):
+        return self.steps_per_epoch
+    
+    def reset(self):
+        if self.is_training:
+            np.random.shuffle(self.indices)
+    
+    def augment_image(self, image):
+        """Apply data augmentation based on strength setting"""
+        if not self.is_training:
+            return image
+        
+        # Define augmentation parameters based on strength
+        if self.augmentation_strength == 'light':
+            rotation_range = 15
+            zoom_range = 0.1
+            flip_prob = 0.3
+        elif self.augmentation_strength == 'medium':
+            rotation_range = 30
+            zoom_range = 0.15
+            flip_prob = 0.5
+        else:  # strong
+            rotation_range = 45
+            zoom_range = 0.2
+            flip_prob = 0.7
+        
+        # Apply random rotation
+        if random.random() < 0.7:
+            angle = random.uniform(-rotation_range, rotation_range)
+            image = image.rotate(angle, resample=Image.BILINEAR, expand=False)
+        
+        # Apply random zoom
+        if random.random() < 0.5:
+            zoom = random.uniform(1.0 - zoom_range, 1.0 + zoom_range)
+            width, height = image.size
+            new_width = int(width * zoom)
+            new_height = int(height * zoom)
+            left = (width - new_width) // 2
+            top = (height - new_height) // 2
+            right = left + new_width
+            bottom = top + new_height
+            
+            if zoom > 1.0:
+                # Zoom in: crop and resize
+                image = image.crop((left, top, right, bottom)).resize((width, height), Image.BILINEAR)
+            else:
+                # Zoom out: resize and pad
+                resized = image.resize((new_width, new_height), Image.BILINEAR)
+                new_img = Image.new('RGB', (width, height), (0, 0, 0))
+                new_img.paste(resized, (left, top))
+                image = new_img
+        
+        # Apply horizontal flip
+        if random.random() < flip_prob:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT)
+        
+        # Apply color jitter
+        if random.random() < 0.5:
+            enhancer = random.choice([
+                lambda img: ImageEnhance.Brightness(img).enhance(random.uniform(0.8, 1.2)),
+                lambda img: ImageEnhance.Contrast(img).enhance(random.uniform(0.8, 1.2)),
+                lambda img: ImageEnhance.Color(img).enhance(random.uniform(0.8, 1.2))
+            ])
+            image = enhancer(image)
+        
+        return image
+    
+    def load_and_preprocess_image(self, image_path, label_path):
+        """Load image and apply YOLO crop based on label"""
+        try:
+            # Load the image
+            image = Image.open(image_path).convert('RGB')
+            img_width, img_height = image.size
+            
+            # Load YOLO label
+            with open(label_path, 'r') as f:
+                label_content = f.read().strip().split()
+            
+            # Parse YOLO format: class x_center y_center width height confidence
+            if len(label_content) >= 5:
+                x_center = float(label_content[1]) * img_width
+                y_center = float(label_content[2]) * img_height
+                width = float(label_content[3]) * img_width
+                height = float(label_content[4]) * img_height
+                
+                # Calculate bounding box coordinates
+                left = max(0, int(x_center - width / 2))
+                top = max(0, int(y_center - height / 2))
+                right = min(img_width, int(x_center + width / 2))
+                bottom = min(img_height, int(y_center + height / 2))
+                
+                # Crop the image to the bounding box
+                image = image.crop((left, top, right, bottom))
+            
+            # Resize to 224x224
+            image = image.resize((224, 224), Image.BILINEAR)
+            
+            # Apply augmentation if training
+            if self.is_training:
+                image = self.augment_image(image)
+            
+            # Convert to array and preprocess
+            img_array = img_to_array(image)
+            img_array = preprocess_input(img_array)
+            
+            return img_array
+        except Exception as e:
+            print(f"Error processing {image_path}: {e}")
+            # Return a blank image in case of error
+            return np.zeros((224, 224, 3))
+    
+    def __getitem__(self, idx):
+        """Get a batch of data"""
+        # Get batch indices
+        start_idx = idx * self.batch_size
+        end_idx = min((idx + 1) * self.batch_size, self.n_samples)
+        batch_indices = self.indices[start_idx:end_idx]
+        
+        # Initialize batch arrays
+        batch_size = len(batch_indices)
+        batch_images = np.zeros((batch_size, 224, 224, 3), dtype=np.float32)
+        batch_labels = np.zeros((batch_size, self.num_classes), dtype=np.float32)
+        
+        # Fill the batch
+        for i, idx in enumerate(batch_indices):
+            # Load and preprocess image
+            img_array = self.load_and_preprocess_image(
+                self.image_paths[idx], 
+                self.label_paths[idx]
+            )
+            batch_images[i] = img_array
+            
+            # Create one-hot encoded label
+            diagnosis = self.diagnoses[idx]
+            diagnosis_idx = self.diagnosis_to_idx.get(diagnosis, 0)  # Default to 0 if not found
+            batch_labels[i, diagnosis_idx] = 1.0
+            
+            # Free memory if needed
+            if self.memory_efficient and i % 10 == 0:
+                gc.collect()
+        
+        return batch_images, batch_labels
 
 
 def create_yolo_generators(

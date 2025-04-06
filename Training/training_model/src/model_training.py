@@ -120,9 +120,10 @@ def focal_loss(gamma=2.0, alpha=0.25):
     return focal_loss_fixed
 
 # Modify the model compilation in build_peft_model function
-def build_peft_model(num_classes, r=8, alpha=32):
+def build_peft_model(num_classes=9, r=8, alpha=32):
     """
     Build and compile the model with PEFT (LoRA) optimizations and memory efficiency
+    Adapted for 9-class skin lesion classification
     """
     # Enable mixed precision for faster training and lower memory usage
     set_global_policy('mixed_float16')
@@ -147,21 +148,19 @@ def build_peft_model(num_classes, r=8, alpha=32):
         dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
         dense_output = dense_layer(x)
         
-        # Add LoRA adaptation
-        lora_adaptation = LoRALayer(512, 512, r=r, alpha=alpha, name='lora_adaptation')(dense_output)
+        # Add dropout for regularization
+        x = Dropout(0.5)(dense_output)
         
-        # Combine original dense output with LoRA adaptation
-        combined = tf.keras.layers.Add()([dense_output, lora_adaptation])
-        
-        x = Dropout(0.5)(combined)
-        outputs = Dense(num_classes, activation='softmax', kernel_initializer='he_normal')(x)
+        # Final classification layer with 9 outputs
+        # MEL, NV, BCC, AK, BKL, DF, VASC, SCC, UNK
+        outputs = Dense(num_classes, activation='softmax', name='predictions')(x)
         
         model = Model(inputs=inputs, outputs=outputs)
         
-        # Compile the model with memory-efficient settings and proper metrics for TF 2.17+
+        # Compile with focal loss to address class imbalance
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-            loss=focal_loss(gamma=2.0, alpha=0.25),  # Use focal loss instead of categorical_crossentropy
+            loss=focal_loss(gamma=2.0, alpha=0.25),
             metrics=[
                 'accuracy',
                 tf.keras.metrics.AUC(name='auc', from_logits=False),

@@ -41,7 +41,6 @@ def main():
     parser.add_argument('--fine_tune_epochs', type=int, default=10, help='Number of epochs for fine-tuning')
     parser.add_argument('--early_stopping', type=int, default=5, help='Patience for early stopping')
     parser.add_argument('--reduce_lr', type=int, default=3, help='Patience for learning rate reduction')
-    # Update fold parameter name to match your command
     parser.add_argument('--fold_idx', type=int, default=0, help='Fold index for cross-validation')
     parser.add_argument('--n_folds', type=int, default=5, help='Number of folds for cross-validation')
     parser.add_argument('--augmentation', type=str, default='medium', choices=['light', 'medium', 'strong'], 
@@ -54,6 +53,22 @@ def main():
                         help='Multiplier for minority class weights')
     parser.add_argument('--use_focal_loss', action='store_true', help='Whether to use focal loss')
     parser.add_argument('--learning_rate', type=float, default=0.0001, help='Learning rate for optimizer')
+
+    parser.add_argument('--csv_path', type=str, 
+                        default="/kaggle/input/2019-isic-csv/ISIC_2019_Training_GroundTruth.csv",
+                        help='Path to the ground truth CSV file')
+    parser.add_argument('--metadata_csv_path', type=str,
+                        default="/kaggle/input/2019-isic-csv/ISIC_2019_Training_Metadata.csv",
+                        help='Path to the metadata CSV file')
+    parser.add_argument('--image_dir', type=str,
+                        default="/kaggle/input/2019-isic/exp",
+                        help='Directory containing the images')
+    parser.add_argument('--labels_dir', type=str,
+                        default="/kaggle/input/2019-isic/exp/labels",
+                        help='Directory containing YOLO labels')
+    parser.add_argument('--model_save_path', type=str,
+                        default="/kaggle/working/DermaAI-Care/Training/training_model/models/skin_cancer_prediction_model.keras",
+                        help='Path to save the final model')
     
     args = parser.parse_args()
     
@@ -66,24 +81,19 @@ def main():
     # Enable memory growth to prevent OOM errors
     set_memory_growth()
     
-    # Define paths
-    csv_path = "/kaggle/input/2019-isic-csv/ISIC_2019_Training_GroundTruth.csv"
-    metadata_csv_path = "/kaggle/input/2019-isic-csv/ISIC_2019_Training_Metadata.csv"
-    image_dir = "/kaggle/input/2019-isic/exp"
-    labels_dir = "/kaggle/input/2019-isic/exp/labels"
-    
-    # Create data generators with metadata - update parameter names
+    # Use the path arguments instead of hardcoded paths
+    # Create data generators with metadata
     train_generator, val_generator, class_indices = create_yolo_generators(
-        csv_path=csv_path,
-        image_dir=image_dir,
-        labels_dir=labels_dir,
+        csv_path=args.csv_path,
+        image_dir=args.image_dir,
+        labels_dir=args.labels_dir,
         batch_size=args.batch_size,
         min_samples_per_class=args.min_samples,
-        fold_idx=args.fold_idx,  # Updated from args.fold
+        fold_idx=args.fold_idx,
         n_folds=args.n_folds,
         seed=args.seed,
         augmentation_strength=args.augmentation,
-        metadata_csv_path=metadata_csv_path if args.use_metadata else None,
+        metadata_csv_path=args.metadata_csv_path if args.use_metadata else None,
     )
     
     # Analyze dataset to understand class distribution
@@ -126,10 +136,10 @@ def main():
     metrics = evaluate_model(model, val_generator)
     
     # Save metrics to JSON file
-    save_metrics_to_json(metrics, f"metrics/base_model_fold_{args.fold}.json")
+    save_metrics_to_json(metrics, f"metrics/base_model_fold_{args.fold_idx}.json")
     
     # Save the model
-    model_path = f"models/model_fold_{args.fold}.keras"
+    model_path = f"models/model_fold_{args.fold_idx}.keras"
     model.save(model_path)
     
     # Log model to MLflow with metadata information
@@ -137,7 +147,7 @@ def main():
         model, 
         history, 
         "skin_lesion_classifier", 
-        args.fold, 
+        args.fold_idx,  # Updated from args.fold
         class_indices,
         metadata_used=args.use_metadata
     )
@@ -158,10 +168,10 @@ def main():
         fine_tuned_metrics = evaluate_model(fine_tuned_model, val_generator)
         
         # Save fine-tuned metrics
-        save_metrics_to_json(fine_tuned_metrics, f"metrics/fine_tuned_model_fold_{args.fold}.json")
+        save_metrics_to_json(fine_tuned_metrics, f"metrics/fine_tuned_model_fold_{args.fold_idx}.json")
         
         # Save fine-tuned model
-        fine_tuned_model_path = f"models/fine_tuned_model_fold_{args.fold}.keras"
+        fine_tuned_model_path = f"models/fine_tuned_model_fold_{args.fold_idx}.keras"
         fine_tuned_model.save(fine_tuned_model_path)
         
         # Create ensemble model from base and fine-tuned models
@@ -169,7 +179,7 @@ def main():
         model_paths = [model_path, fine_tuned_model_path]
         
         # If previous fold models exist, add them to the ensemble
-        for prev_fold in range(args.fold):
+        for prev_fold in range(args.fold_idx):
             prev_model_path = f"models/fine_tuned_model_fold_{prev_fold}.keras"
             if os.path.exists(prev_model_path):
                 model_paths.append(prev_model_path)
@@ -185,10 +195,10 @@ def main():
         ensemble_metrics = evaluate_model(ensemble_model, val_generator)
         
         # Save ensemble metrics
-        save_metrics_to_json(ensemble_metrics, f"metrics/ensemble_model_fold_{args.fold}.json")
+        save_metrics_to_json(ensemble_metrics, f"metrics/ensemble_model_fold_{args.fold_idx}.json")
         
         # Save the final model for deployment
-        ensemble_model.save(MODEL_SAVE_PATH)
+        ensemble_model.save(args.model_save_path)
         
         print(f"Training, evaluation, and saving completed successfully!")
 

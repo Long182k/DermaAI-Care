@@ -826,290 +826,8 @@ def create_balanced_data_generator(generator, batch_size=64):
     except Exception as e:
         print(f"Error creating balanced generator: {e}")
         print("Returning original generator")
-        traceback.print_exc()  # Print full traceback for debugging
+        traceback.print_exc() 
         return generator
-
-    """
-    Fine-tune the model by unfreezing some layers with early stopping and memory optimization
-    
-    Args:
-        model: The model to fine-tune
-        train_generator: Training data generator
-        val_generator: Validation data generator
-        epochs: Number of epochs for fine-tuning
-        early_stopping_patience: Patience for early stopping
-        learning_rate: Learning rate for fine-tuning (should be lower than initial training)
-    """
-    print("Preparing model for fine-tuning...")
-    
-    # Create callbacks at the beginning of the function to avoid reference errors
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            monitor='val_recall',  # Focus on recall for minority class
-            patience=early_stopping_patience,
-            restore_best_weights=True,
-            mode='max'
-        ),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_recall',
-            factor=0.2,
-            patience=3,
-            min_lr=1e-7,
-            mode='max',
-            verbose=1
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            filepath='models/fine_tuned_checkpoint.keras',
-            monitor='val_recall',
-            save_best_only=True,
-            mode='max',
-            verbose=1
-        ),
-        TimeoutCallback(timeout_seconds=3600),  # 1 hour timeout
-        MemoryCleanupCallback(cleanup_frequency=2)  # Clean memory every 2 epochs
-    ]
-    
-    # Instead of recreating the model, just unfreeze layers in the existing model
-    try:
-        # Find the base model (InceptionResNetV2) in the current model
-        for layer in model.layers:
-            if isinstance(layer, tf.keras.Model):  # This should find the InceptionResNetV2 base model
-                base_model = layer
-                print(f"Found base model: {base_model.name}")
-                
-                # Unfreeze only the last 10 layers of the base model to save memory
-                for layer in base_model.layers[:-10]:
-                    layer.trainable = False
-                for layer in base_model.layers[-10:]:
-                    layer.trainable = True
-                
-                print(f"Unfrozen last 10 layers of base model")
-                break
-        else:
-            # If we didn't find a nested model, look for the InceptionResNetV2 layer directly
-            for i, layer in enumerate(model.layers):
-                if "inception" in layer.name.lower():
-                    base_layer = layer
-                    print(f"Found base layer at index {i}: {base_layer.name}")
-                    
-                    # Unfreeze only the last 10 layers if it has layers attribute
-                    if hasattr(base_layer, 'layers'):
-                        for layer in base_layer.layers[:-10]:
-                            layer.trainable = False
-                        for layer in base_layer.layers[-10:]:
-                            layer.trainable = True
-                        print(f"Unfrozen last 10 layers of base layer")
-                    else:
-                        # If it doesn't have layers, just make it trainable
-                        base_layer.trainable = True
-                        print(f"Made base layer trainable")
-                    break
-            else:
-                print("Warning: Could not find base model or InceptionResNetV2 layer. Making all layers trainable.")
-                model.trainable = True
-        
-        # Clear session to avoid strategy stack issues
-        tf.keras.backend.clear_session()
-        
-        # Fix for optimizer initialization error - create a new optimizer directly
-        new_optimizer = tf.keras.optimizers.Adam(learning_rate=1e-5)
-        
-        # Recompile the model with the new optimizer
-        model.compile(
-            optimizer=new_optimizer,
-            loss='categorical_crossentropy',
-            metrics=[
-                'accuracy',
-                tf.keras.metrics.AUC(name='auc', from_logits=False),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
-            ]
-        )
-        
-        print(f"Model recompiled with learning rate: 1e-5")
-        
-    except Exception as e:
-        print(f"Error during model layer unfreezing: {e}")
-        print("Falling back to simpler fine-tuning approach...")
-        
-        # Simple approach: just make the whole model trainable
-        model.trainable = True
-        
-        # Clear session to avoid strategy stack issues
-        tf.keras.backend.clear_session()
-        
-        # Recompile with a lower learning rate
-        # Recompile the model with focal loss and lower learning rate
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-            loss=focal_loss(gamma=2.0, alpha=0.25),  # Use focal loss
-            metrics=[
-                'accuracy',
-                tf.keras.metrics.AUC(name='auc', from_logits=False),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
-            ]
-        )
-        
-        # Create callbacks for fine-tuning with focus on minority class
-        callbacks = [
-            tf.keras.callbacks.EarlyStopping(
-                monitor='val_recall',  # Focus on recall for minority class
-                patience=early_stopping_patience,
-                restore_best_weights=True,
-                mode='max'
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor='val_recall',
-                factor=0.2,
-                patience=3,
-                min_lr=1e-7,
-                mode='max',
-                verbose=1
-            ),
-            tf.keras.callbacks.ModelCheckpoint(
-                filepath='models/fine_tuned_checkpoint.keras',
-                monitor='val_recall',
-                save_best_only=True,
-                mode='max',
-                verbose=1
-            ),
-            TimeoutCallback(timeout_seconds=3600),  # 1 hour timeout
-            MemoryCleanupCallback(cleanup_frequency=2)  # Clean memory every 2 epochs
-        ]
-    
-    # Train the model without using strategy.scope()
-    try:
-        # Use a try-except block to handle potential strategy issues
-        try:
-            # Disable XLA compilation to avoid MaxPool gradient ops error
-            tf.config.optimizer.set_jit(False)
-            
-            # First attempt: try to fit the model directly
-            # In your main training function, add:
-            
-            # Create balanced generators for training
-            balanced_train_generator = create_balanced_data_generator(train_generator)
-            
-            # Use the balanced generator for training
-            history = model.fit(
-                balanced_train_generator,
-                validation_data=val_generator,  # Keep validation data as is to get realistic metrics
-                epochs=epochs,
-                callbacks=callbacks,
-                verbose=1
-            )
-        except RuntimeError as e:
-            if "Mixing different tf.distribute.Strategy objects" in str(e):
-                print("Strategy mismatch detected. Attempting to recreate model...")
-                
-                # Save the weights
-                weights = model.get_weights()
-                
-                # Clear session
-                tf.keras.backend.clear_session()
-                
-                # Create a new model with the same architecture
-                new_model = clone_model(model)
-                
-                # Set the weights
-                new_model.set_weights(weights)
-                
-                # Recompile
-                new_model.compile(
-                    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                    loss='categorical_crossentropy',
-                    metrics=[
-                        'accuracy',
-                        tf.keras.metrics.AUC(name='auc', from_logits=False),
-                        tf.keras.metrics.Precision(name='precision'),
-                        tf.keras.metrics.Recall(name='recall')
-                    ]
-                )
-                
-                # Disable XLA compilation to avoid MaxPool gradient ops error
-                tf.config.optimizer.set_jit(False)
-                
-                # Try fitting again
-                history = new_model.fit(
-                    train_generator,
-                    validation_data=val_generator,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    verbose=1
-                )
-                
-                # Update the original model
-                model = new_model
-            else:
-                # If it's a different error, re-raise it
-                raise
-        
-        # Force garbage collection after training
-        gc.collect()
-        
-        return history
-    except Exception as e:
-        print(f"Error during fine-tuning: {e}")
-        # Force garbage collection on error
-        gc.collect()
-        
-        # Try one last approach - simplified model with fewer layers
-        try:
-            print("Attempting final approach: creating a simplified model...")
-            
-            # Create a simplified model that doesn't use MaxPool gradient ops
-            with strategy.scope():
-                # Create a new model with fewer layers
-                base_model = InceptionResNetV2(
-                    weights='imagenet',
-                    include_top=False,
-                    input_shape=(224, 224, 3),
-                    pooling='avg'
-                )
-                
-                # Freeze all layers
-                base_model.trainable = False
-                
-                # Build a simpler model
-                inputs = Input(shape=(224, 224, 3))
-                x = base_model(inputs, training=False)
-                x = Dense(256, activation='relu')(x)
-                x = Dropout(0.5)(x)
-                outputs = Dense(len(train_generator.class_indices), activation='softmax')(x)
-                
-                simplified_model = Model(inputs=inputs, outputs=outputs)
-                
-                # Compile the model
-                simplified_model.compile(
-                    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-                    loss='categorical_crossentropy',
-                    metrics=[
-                        'accuracy',
-                        tf.keras.metrics.AUC(name='auc', from_logits=False),
-                        tf.keras.metrics.Precision(name='precision'),
-                        tf.keras.metrics.Recall(name='recall')
-                    ]
-                )
-            
-            # Disable XLA compilation
-            tf.config.optimizer.set_jit(False)
-            
-            # Train the simplified model
-            history = simplified_model.fit(
-                train_generator,
-                validation_data=val_generator,
-                epochs=epochs,
-                callbacks=callbacks,
-                verbose=1
-            )
-            
-            # Return the simplified model
-            return history
-        except Exception as e2:
-            print(f"Final approach failed: {e2}")
-            print("Fine-tuning could not be completed. Returning original model.")
-            return None
 
 def setup_gpu(memory_limit=None, allow_growth=True):
     """
@@ -1305,71 +1023,79 @@ def create_ensemble_model(model_paths=None, num_classes=9, num_models=3):
 
 def build_peft_model_with_metadata(num_classes=9, metadata_dim=0, r=8, alpha=32):
     """
-    Build and compile the model with PEFT (LoRA) optimizations and metadata integration
-    Adapted for 9-class skin lesion classification with metadata features
+    Build a PEFT model that can handle both image data and metadata features
     
     Args:
         num_classes: Number of output classes
         metadata_dim: Dimension of metadata features
-        r: LoRA rank
-        alpha: LoRA scaling factor
+        r: Rank for LoRA adaptation
+        alpha: Alpha parameter for LoRA
+        
+    Returns:
+        A compiled model that can process both images and metadata
     """
-    # Enable mixed precision for faster training and lower memory usage
-    set_global_policy('mixed_float16')
+    # Create the base model for image processing
+    base_model = tf.keras.applications.InceptionResNetV2(
+        include_top=False,
+        weights='imagenet',
+        input_shape=(224, 224, 3),
+        pooling='avg'
+    )
     
-    with strategy.scope():
-        # Create the base model with efficient memory usage
-        base_model = InceptionResNetV2(
-            weights='imagenet',
-            include_top=False,
-            input_shape=(224, 224, 3),
-            pooling='avg'
-        )
-        
-        # Freeze the base model
-        base_model.trainable = False
-        
-        # Build the model using Functional API
-        image_input = Input(shape=(224, 224, 3), name='image_input')
-        metadata_input = Input(shape=(metadata_dim,), name='metadata_input')
-        
-        # Process image through base model
-        x = base_model(image_input, training=False)
-        
-        # Combine image features with metadata
-        if metadata_dim > 0:
-            # Process metadata through dense layers
-            metadata_features = Dense(32, activation='relu')(metadata_input)
-            metadata_features = Dropout(0.2)(metadata_features)
-            
-            # Concatenate image features and metadata features
-            x = Concatenate()([x, metadata_features])
-        
-        # Apply LoRA to the final dense layer
-        dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
-        dense_output = dense_layer(x)
-        
-        # Add dropout for regularization
-        x = Dropout(0.5)(dense_output)
-        
-        # Final classification layer with 9 outputs
-        # MEL, NV, BCC, AK, BKL, DF, VASC, SCC, UNK
-        outputs = Dense(num_classes, activation='softmax', name='predictions')(x)
-        
-        # Create model with multiple inputs
-        model = Model(inputs=[image_input, metadata_input] if metadata_dim > 0 else image_input, 
-                     outputs=outputs)
-        
-        # Compile with focal loss to address class imbalance
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-            loss=focal_loss(gamma=2.0, alpha=0.25),
-            metrics=[
-                'accuracy',
-                tf.keras.metrics.AUC(name='auc', from_logits=False),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
-            ]
-        )
-        
-        return model
+    # Freeze the base model layers
+    for layer in base_model.layers:
+        layer.trainable = False
+    
+    # Image input and processing branch
+    image_input = tf.keras.layers.Input(shape=(224, 224, 3), name='image_input')
+    x = base_model(image_input)
+    
+    # Add a few layers on top of the base model
+    x = tf.keras.layers.Dense(512, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.3)(x)
+    
+    # Metadata input and processing branch
+    metadata_input = tf.keras.layers.Input(shape=(metadata_dim,), name='metadata_input')
+    m = tf.keras.layers.Dense(64, activation='relu')(metadata_input)
+    m = tf.keras.layers.Dropout(0.2)(m)
+    m = tf.keras.layers.Dense(32, activation='relu')(m)
+    
+    # Combine image features with metadata
+    combined = tf.keras.layers.Concatenate()([x, m])
+    
+    # Add final layers
+    combined = tf.keras.layers.Dense(256, activation='relu')(combined)
+    combined = tf.keras.layers.Dropout(0.3)(combined)
+    combined = tf.keras.layers.Dense(128, activation='relu')(combined)
+    
+    # Output layer
+    output = tf.keras.layers.Dense(num_classes, activation='softmax')(combined)
+    
+    # Create the model with two inputs
+    model = tf.keras.Model(inputs=[image_input, metadata_input], outputs=output)
+    
+    # Apply PEFT if available
+    if PEFT_AVAILABLE:
+        try:
+            # Configure LoRA for efficient fine-tuning
+            peft_config = LoraConfig(
+                task_type=TaskType.SEQ_CLS,
+                inference_mode=False,
+                r=r,
+                lora_alpha=alpha,
+                lora_dropout=0.1
+            )
+            model = get_peft_model(model, peft_config)
+            print("Applied PEFT (LoRA) to the model")
+        except Exception as e:
+            print(f"Error applying PEFT: {e}")
+            print("Using standard model without PEFT")
+    
+    # Compile the model
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+        loss='categorical_crossentropy',
+        metrics=['accuracy', tf.keras.metrics.AUC(), tf.keras.metrics.Precision(), tf.keras.metrics.Recall()]
+    )
+    
+    return model

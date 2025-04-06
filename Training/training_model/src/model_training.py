@@ -317,36 +317,34 @@ def train_model(
         # Convert class weights to sample weights for multi-label
         print(f"Applying class weights for multi-label classification: {class_weights}")
         
-        # Create a weighted binary crossentropy loss
-        def weighted_binary_crossentropy(y_true, y_pred):
-            # Create per-class weights tensor
-            class_weights_tensor = tf.constant(
-                [class_weights.get(i, 1.0) for i in range(y_true.shape[-1])],
+        # Create a custom loss function that incorporates class weights directly
+        # This avoids passing sample_weight to metrics which causes conflicts
+        def custom_weighted_bce(y_true, y_pred):
+            # Standard binary crossentropy
+            epsilon = tf.keras.backend.epsilon()
+            y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+            bce = -(y_true * tf.math.log(y_pred) + (1 - y_true) * tf.math.log(1 - y_pred))
+            
+            # Create per-class weights tensor with proper shape for broadcasting
+            class_weights_tensor = tf.convert_to_tensor(
+                [class_weights.get(i, 1.0) for i in range(y_true.shape[-1])], 
                 dtype=tf.float32
             )
+            class_weights_tensor = tf.reshape(class_weights_tensor, [1, -1])
             
-            # Calculate binary crossentropy
-            bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+            # Apply class weights to binary crossentropy
+            # Weight positive examples using class weights
+            weighted_bce = bce * (y_true * class_weights_tensor + (1 - y_true))
             
-            # Apply weights based on the true classes in each sample
-            # Use broadcasting to apply weights to each sample/class
-            weights = tf.reduce_sum(y_true * class_weights_tensor, axis=-1)
-            
-            # Reshape weights to match bce shape for broadcasting
-            weights = tf.reshape(weights, [-1, 1])
-            
-            # Calculate weighted loss - use direct multiplication
-            weighted_loss = bce * weights
-            
-            # Return mean loss
-            return tf.reduce_mean(weighted_loss)
+            # Return mean over all dimensions
+            return tf.reduce_mean(weighted_bce)
         
         # Recompile the model with our custom loss
         metrics = model.metrics
         optimizer = model.optimizer
         model.compile(
             optimizer=optimizer,
-            loss=weighted_binary_crossentropy,
+            loss=custom_weighted_bce,
             metrics=metrics
         )
     
@@ -554,30 +552,29 @@ def fine_tune_model(
         
         # For multi-label classification with class weights, we need a custom loss
         if multi_label and class_weights:
-            # Create a weighted binary crossentropy loss
-            def weighted_binary_crossentropy(y_true, y_pred):
-                # Create per-class weights tensor
-                class_weights_tensor = tf.constant(
-                    [class_weights.get(i, 1.0) for i in range(y_true.shape[-1])],
+            # Create a custom loss function that incorporates class weights directly
+            # This avoids passing sample_weight to metrics which causes conflicts
+            def custom_weighted_bce(y_true, y_pred):
+                # Standard binary crossentropy
+                epsilon = tf.keras.backend.epsilon()
+                y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+                bce = -(y_true * tf.math.log(y_pred) + (1 - y_true) * tf.math.log(1 - y_pred))
+                # Create per-class weights tensor with proper shape for broadcasting
+                class_weights_tensor = tf.convert_to_tensor(
+                    [class_weights.get(i, 1.0) for i in range(y_true.shape[-1])], 
+
                     dtype=tf.float32
                 )
+                class_weights_tensor = tf.reshape(class_weights_tensor, [1, -1])
                 
-                # Calculate binary crossentropy
-                bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+                # Apply class weights to binary crossentropy
+                # Weight positive examples using class weights
+                weighted_bce = bce * (y_true * class_weights_tensor + (1 - y_true))
                 
-                # Apply weights based on the true classes in each sample
-                weights = tf.reduce_sum(y_true * class_weights_tensor, axis=-1)
-                
-                # Reshape weights to match bce shape for broadcasting
-                weights = tf.reshape(weights, [-1, 1])
-                
-                # Calculate weighted loss
-                weighted_loss = bce * weights
-                
-                # Return mean loss
-                return tf.reduce_mean(weighted_loss)
+                # Return mean over all dimensions
+                return tf.reduce_mean(weighted_bce)
             
-            loss = weighted_binary_crossentropy
+            loss = custom_weighted_bce
             print("Using weighted binary crossentropy for multi-label fine-tuning")
         elif multi_label:
             loss = tf.keras.losses.BinaryCrossentropy()

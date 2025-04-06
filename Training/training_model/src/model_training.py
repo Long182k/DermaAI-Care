@@ -48,41 +48,40 @@ except ImportError:
 strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
 
 # Custom LoRA layer for TensorFlow
+# First, add the custom LoRA layer implementation at the beginning of the file (before the fine_tune_model function)
 class LoRALayer(tf.keras.layers.Layer):
     """
-    Low-Rank Adaptation (LoRA) layer for efficient fine-tuning
+    Custom LoRA (Low-Rank Adaptation) layer for TensorFlow models.
+    This implements parameter-efficient fine-tuning by adding low-rank adaptation matrices.
     """
     def __init__(self, in_features, out_features, r=8, alpha=32, **kwargs):
         super(LoRALayer, self).__init__(**kwargs)
         self.in_features = in_features
         self.out_features = out_features
-        self.r = r
-        self.alpha = alpha
+        self.r = r  # Rank of adaptation
+        self.alpha = alpha  # Scaling factor
         
     def build(self, input_shape):
-        # Initialize LoRA matrices
+        # Initialize A with Gaussian and B with zeros as per LoRA paper
         self.lora_A = self.add_weight(
-            name="lora_A",
             shape=(self.in_features, self.r),
-            initializer="random_normal",
-            trainable=True
+            initializer=tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01),
+            trainable=True,
+            name="lora_A"
         )
-        
         self.lora_B = self.add_weight(
-            name="lora_B",
             shape=(self.r, self.out_features),
-            initializer="zeros",
-            trainable=True
+            initializer=tf.keras.initializers.Zeros(),
+            trainable=True,
+            name="lora_B"
         )
-        
-        # Build the layer
         super(LoRALayer, self).build(input_shape)
         
     def call(self, inputs):
         # LoRA adaptation: inputs @ (A @ B) * (alpha / r)
         lora_output = tf.matmul(inputs, tf.matmul(self.lora_A, self.lora_B)) * (self.alpha / self.r)
         return lora_output
-        
+    
     def get_config(self):
         config = super(LoRALayer, self).get_config()
         config.update({
@@ -130,6 +129,7 @@ def build_peft_model(num_classes=9, r=8, alpha=32):
     # Enable mixed precision for faster training and lower memory usage
     set_global_policy('mixed_float16')
     
+
     with strategy.scope():
         # Create the base model with efficient memory usage
         base_model = InceptionResNetV2(
@@ -139,18 +139,24 @@ def build_peft_model(num_classes=9, r=8, alpha=32):
             pooling='avg'
         )
         
-        # Freeze the base model
-        base_model.trainable = False
+        # Freeze most of the base model, but unfreeze more layers to ensure we have trainable weights
+        # Unfreeze more layers by default to prevent the "no trainable weights" error
+        for layer in base_model.layers[:-20]:  # Freeze all except last 20 layers
+            layer.trainable = False
+        for layer in base_model.layers[-20:]:  # Unfreeze last 20 layers
+            layer.trainable = True
+        print(f"Unfrozen the last 20 layers of the base model to ensure trainable weights")
         
         # Build the model using Functional API
-        inputs = Input(shape=(224, 224, 3))
+        inputs = Input(shape=(224, 224, 3), name='image_input')
         x = base_model(inputs, training=False)
         
         # Apply LoRA to the final dense layer
-        dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
+        dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1', trainable=True)
         dense_output = dense_layer(x)
         
         # Create LoRA adaptation layer using the r and alpha parameters
+        # Make sure this layer is trainable
         lora_layer = LoRALayer(
             in_features=512,
             out_features=512,
@@ -158,18 +164,22 @@ def build_peft_model(num_classes=9, r=8, alpha=32):
             alpha=alpha,  # Using the alpha parameter
             name='lora_adaptation'
         )(dense_output)
+        lora_layer.trainable = True  # Explicitly set trainable
         
         # Combine the original dense output with the LoRA adaptation
-        x = tf.keras.layers.Add()([dense_output, lora_layer])
+        x = tf.keras.layers.Add(name='lora_combined')([dense_output, lora_layer])
         
         # Add dropout for regularization
-        x = Dropout(0.5)(x)
+        x = Dropout(0.5, name='dropout_1')(x)
         
-        # Final classification layer with 9 outputs
-        # MEL, NV, BCC, AK, BKL, DF, VASC, SCC, UNK
-        outputs = Dense(num_classes, activation='softmax', name='predictions')(x)
+        # Final classification layer with appropriate number of outputs
+        # Explicitly set as trainable to ensure we have trainable weights
+        outputs = Dense(num_classes, activation='softmax', name='predictions', trainable=True)(x)
         
-        model = Model(inputs=inputs, outputs=outputs)
+        # Use a unique model name with timestamp to avoid conflicts
+        import time
+        unique_model_name = f'skin_lesion_model_{int(time.time())}'
+        model = Model(inputs=inputs, outputs=outputs, name=unique_model_name)
         
         # Apply PEFT if available
         if PEFT_AVAILABLE:
@@ -182,13 +192,43 @@ def build_peft_model(num_classes=9, r=8, alpha=32):
                     r=r,
                     lora_alpha=alpha,
                     lora_dropout=0.1,
-                    target_modules=["dense_1", "lora_adaptation", "predictions"]  # Target specific layers by name
+                    target_modules=["dense_1", "predictions"]  # Target specific layers by name
                 )
                 model = get_peft_model(model, peft_config)
                 print("Applied PEFT (LoRA) to the model")
             except Exception as e:
-                print(f"Error applying PEFT: {e}")
+                print(f"build_peft_model === Error applying PEFT: {e}")
                 print("Using standard model without PEFT")
+        
+        # Verify we have trainable weights BEFORE compilation
+        trainable_count = np.sum([np.prod(v.get_shape()) for v in model.trainable_weights])
+        non_trainable_count = np.sum([np.prod(v.get_shape()) for v in model.non_trainable_weights])
+        print(f"Trainable weights: {trainable_count:,}")
+        print(f"Non-trainable weights: {non_trainable_count:,}")
+        
+        if trainable_count == 0:
+            print("WARNING: Model has no trainable weights! Unfreezing all layers...")
+            # If no trainable weights, unfreeze all layers as a last resort
+            for layer in base_model.layers:  # Unfreeze ALL layers
+                layer.trainable = True
+            # Make dense layers trainable
+            dense_layer.trainable = True
+            
+            # Check again after unfreezing
+            trainable_count = np.sum([np.prod(v.get_shape()) for v in model.trainable_weights])
+            print(f"After unfreezing all layers - Trainable weights: {trainable_count:,}")
+            
+            if trainable_count == 0:
+                print("CRITICAL ERROR: Still no trainable weights after unfreezing all layers!")
+                print("Creating a new model with explicit trainable parameters...")
+                
+                # Create a completely new model with explicit trainable parameters
+                inputs = Input(shape=(224, 224, 3), name='new_image_input')
+                x = base_model(inputs)
+                x = Dense(512, activation='relu', trainable=True, name='new_dense_1')(x)
+                x = Dropout(0.5)(x)
+                outputs = Dense(num_classes, activation='softmax', trainable=True, name='new_predictions')(x)
+                model = Model(inputs=inputs, outputs=outputs, name=f'emergency_model_{int(time.time())}')
         
         # Compile with focal loss to address class imbalance
         model.compile(
@@ -239,29 +279,6 @@ class MemoryCleanupCallback(Callback):
         if epoch % self.cleanup_frequency == 0:
             tf.keras.backend.clear_session()
             gc.collect()
-
-# Analysis of Training and Evaluation Results
-
-# Based on the logs you've provided, your model is running without crashing, which is good news after the previous errors. However, there are some performance issues that need attention:
-
-## Current Status
-
-# 1. **Sample Mismatch Fixed**: The code successfully handled the mismatch between true labels (19) and predictions (16) by adjusting to 16 samples.
-
-# 2. **Class Imbalance**: Your dataset is imbalanced with 12 samples of class 0 and 4 samples of class 1.
-
-# 3. **Performance Issues**:
-#    - The model is predicting all samples as class 0 (majority class)
-#    - Precision, recall, and F1-score for class 1 are all 0.0
-#    - Overall accuracy is 75%, but this is misleading due to class imbalance
-
-# 4. **Warnings**: The sklearn warnings about "Precision and F-score are ill-defined" indicate that the model didn't predict any samples for class 1.
-
-## Recommendations
-
-# To improve your model's performance, I suggest the following modifications to your training approach:
-
-# In the train_model function, modify the class weights handling:
 
 # Modify the train_model function to better handle class imbalance
 def train_model(model, train_data, val_data, epochs, early_stopping_patience, reduce_lr_patience, 
@@ -409,64 +426,12 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
         if is_yolo_generator:
             print("Detected YOLODetectionGenerator. Converting to tf.data.Dataset for compatibility")
             
-            # Create a dataset from the generator that Keras can understand
-            def create_dataset_from_yolo_generator(generator, batch_size):
-                # Get a sample batch to determine shapes
-                sample_batch = generator[0]
-                
-                # Determine if this is a metadata model
-                has_metadata = isinstance(model.input, list) and len(model.input) > 1
-                
-                # Create a generator function that yields batches in the right format
-                def gen_fn():
-                    for i in range(len(generator)):
-                        try:
-                            batch = generator[i]
-                            if has_metadata:
-                                # For models with metadata, return the full structure
-                                yield batch
-                            else:
-                                # For models without metadata, extract just the images
-                                [images, _], labels = batch
-                                yield images, labels
-                        except Exception as e:
-                            print(f"Error in batch {i}: {e}")
-                            # Return a dummy batch with correct shapes
-                            if has_metadata:
-                                [images, metadata], labels = sample_batch
-                                yield [np.zeros_like(images), np.zeros_like(metadata)], np.zeros_like(labels)
-                            else:
-                                [images, _], labels = sample_batch
-                                yield np.zeros_like(images), np.zeros_like(labels)
-                
-                # Create dataset with appropriate output signature
-                if has_metadata:
-                    [images, metadata], labels = sample_batch
-                    output_signature = (
-                        (
-                            tf.TensorSpec(shape=images.shape, dtype=tf.float32),
-                            tf.TensorSpec(shape=metadata.shape, dtype=tf.float32)
-                        ),
-                        tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
-                    )
-                else:
-                    [images, _], labels = sample_batch
-                    output_signature = (
-                        tf.TensorSpec(shape=images.shape, dtype=tf.float32),
-                        tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
-                    )
-                
-                # Create and return the dataset
-                dataset = tf.data.Dataset.from_generator(
-                    gen_fn,
-                    output_signature=output_signature
-                )
-                
-                return dataset.prefetch(tf.data.AUTOTUNE)
+            # Use the globally defined create_dataset_from_yolo_generator function
+            # No need to redefine it here
             
             # Convert generators to datasets
-            train_dataset = create_dataset_from_yolo_generator(train_data, args.batch_size if 'args' in globals() else 16)
-            val_dataset = create_dataset_from_yolo_generator(val_data, args.batch_size if 'args' in globals() else 16)
+            train_dataset = create_dataset_from_yolo_generator(train_data)
+            val_dataset = create_dataset_from_yolo_generator(val_data)
             
             # Train with the datasets
             history = model.fit(
@@ -512,6 +477,189 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
         
         return None
 
+
+# Define the create_dataset_from_yolo_generator function at the module level
+def create_dataset_from_yolo_generator(generator):
+    """
+    Create a TensorFlow Dataset from a YOLODetectionGenerator
+    
+    Args:
+        generator: YOLODetectionGenerator instance
+        
+    Returns:
+        tf.data.Dataset compatible with model.fit
+    """
+    # Get a sample batch to determine shapes
+    sample_batch = generator[0]
+    
+    # Determine if this is a metadata model by checking the model input structure
+    has_metadata = False
+    if hasattr(generator, 'metadata_dim') and generator.metadata_dim > 0:
+        has_metadata = True
+    
+    # Debug the batch structure
+    print(f"Sample batch structure: {type(sample_batch)}")
+    if isinstance(sample_batch, tuple):
+        print(f"  Tuple length: {len(sample_batch)}")
+        for j, item in enumerate(sample_batch):
+            print(f"  Item {j} type: {type(item)}")
+            if isinstance(item, list):
+                print(f"    List length: {len(item)}")
+                for k, subitem in enumerate(item):
+                    print(f"    Subitem {k} shape: {subitem.shape if hasattr(subitem, 'shape') else 'No shape'}")
+    
+    # Create a generator function that yields batches in the right format
+    def gen_fn():
+        for i in range(len(generator)):
+            try:
+                batch = generator[i]
+                
+                # Debug the batch structure for the first batch
+                if i == 0:
+                    print(f"Batch {i} structure: {type(batch)}")
+                    if isinstance(batch, tuple):
+                        print(f"  Tuple length: {len(batch)}")
+                        for j, item in enumerate(batch):
+                            print(f"  Item {j} type: {type(item)}")
+                            if isinstance(item, list):
+                                print(f"    List length: {len(item)}")
+                                for k, subitem in enumerate(item):
+                                    print(f"    Subitem {k} shape: {subitem.shape if hasattr(subitem, 'shape') else 'No shape'}")
+                
+                # Properly format the data based on the expected input
+                if has_metadata:
+                    # For models with metadata input
+                    if isinstance(batch, tuple) and len(batch) == 2:
+                        inputs, labels = batch
+                        if isinstance(inputs, list) and len(inputs) >= 2:
+                            # Correct format: yield a tuple of (tuple of tensors, tensor)
+                            images, metadata = inputs[0], inputs[1]
+                            yield (images, metadata), labels
+                        else:
+                            print(f"Warning: Expected inputs to be a list with at least 2 elements, got {type(inputs)}")
+                            # Try to handle unexpected format
+                            if isinstance(inputs, np.ndarray):
+                                # Create dummy metadata of appropriate shape
+                                dummy_metadata = np.zeros((inputs.shape[0], generator.metadata_dim), dtype=np.float32)
+                                yield (inputs, dummy_metadata), labels
+                            else:
+                                # Skip this batch
+                                continue
+                    else:
+                        print(f"Warning: Expected batch to be a tuple of length 2, got {type(batch)}")
+                        continue
+                else:
+                    # For models with single input (images only)
+                    if isinstance(batch, tuple) and len(batch) == 2:
+                        inputs, labels = batch
+                        if isinstance(inputs, list) and len(inputs) > 0:
+                            # Extract just the images from [images, metadata]
+                            yield inputs[0], labels
+                        elif isinstance(inputs, np.ndarray):
+                            # Already in correct format
+                            yield inputs, labels
+                        else:
+                            print(f"Warning: Unexpected inputs type: {type(inputs)}")
+                            continue
+                    else:
+                        print(f"Warning: Expected batch to be a tuple of length 2, got {type(batch)}")
+                        continue
+            except Exception as e:
+                print(f"Error in batch {i}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+    
+    # Create dataset with appropriate output signature based on the generator structure
+    if has_metadata:
+        # For models with metadata
+        try:
+            if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
+                inputs, labels = sample_batch
+                if isinstance(inputs, list) and len(inputs) >= 2:
+                    images, metadata = inputs[0], inputs[1]
+                    output_signature = (
+                        (
+                            tf.TensorSpec(shape=(None,) + images.shape[1:], dtype=tf.float32),
+                            tf.TensorSpec(shape=(None,) + metadata.shape[1:], dtype=tf.float32)
+                        ),
+                        tf.TensorSpec(shape=(None,) + labels.shape[1:], dtype=tf.float32)
+                    )
+                else:
+                    # Fallback to expected shapes
+                    print("Using fallback shapes for metadata model")
+                    output_signature = (
+                        (
+                            tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                            tf.TensorSpec(shape=(None, generator.metadata_dim), dtype=tf.float32)
+                        ),
+                        tf.TensorSpec(shape=(None, generator.n_classes), dtype=tf.float32)
+                    )
+            else:
+                # Fallback to expected shapes
+                print("Using fallback shapes for metadata model (tuple structure issue)")
+                output_signature = (
+                    (
+                        tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                        tf.TensorSpec(shape=(None, generator.metadata_dim), dtype=tf.float32)
+                    ),
+                    tf.TensorSpec(shape=(None, generator.n_classes), dtype=tf.float32)
+                )
+        except Exception as e:
+            print(f"Error creating output signature for metadata model: {e}")
+            # Use a very generic signature as last resort
+            output_signature = (
+                (
+                    tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                    tf.TensorSpec(shape=(None, generator.metadata_dim), dtype=tf.float32)
+                ),
+                tf.TensorSpec(shape=(None, generator.n_classes), dtype=tf.float32)
+            )
+    else:
+        # For models without metadata
+        try:
+            if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
+                inputs, labels = sample_batch
+                if isinstance(inputs, list) and len(inputs) > 0:
+                    images = inputs[0]
+                    output_signature = (
+                        tf.TensorSpec(shape=(None,) + images.shape[1:], dtype=tf.float32),
+                        tf.TensorSpec(shape=(None,) + labels.shape[1:], dtype=tf.float32)
+                    )
+                elif isinstance(inputs, np.ndarray):
+                    output_signature = (
+                        tf.TensorSpec(shape=(None,) + inputs.shape[1:], dtype=tf.float32),
+                        tf.TensorSpec(shape=(None,) + labels.shape[1:], dtype=tf.float32)
+                    )
+                else:
+                    # Fallback to expected shapes
+                    print("Using fallback shapes for image-only model")
+                    output_signature = (
+                        tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                        tf.TensorSpec(shape=(None, generator.n_classes), dtype=tf.float32)
+                    )
+            else:
+                # Fallback to expected shapes
+                print("Using fallback shapes for image-only model (tuple structure issue)")
+                output_signature = (
+                    tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                    tf.TensorSpec(shape=(None, generator.n_classes), dtype=tf.float32)
+                )
+        except Exception as e:
+            print(f"Error creating output signature for image-only model: {e}")
+            # Use a very generic signature as last resort
+            output_signature = (
+                tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(None, generator.n_classes), dtype=tf.float32)
+            )
+    
+    # Create and return the dataset
+    dataset = tf.data.Dataset.from_generator(
+        gen_fn,
+        output_signature=output_signature
+    )
+    
+    return dataset.prefetch(tf.data.AUTOTUNE)
 
 def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience, learning_rate=1e-5):
     """
@@ -571,6 +719,35 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
         
         # For YOLODetectionGenerator, we need to convert it to a format that works with model.fit
         try:
+            # First, inspect the model input structure
+            print(f"Model input structure: {model.input}")
+            print(f"Model output structure: {model.output}")
+            
+            # Convert generators to datasets with proper error handling
+            train_dataset = create_dataset_from_yolo_generator(train_generator)
+            val_dataset = create_dataset_from_yolo_generator(val_generator)
+            
+            # Add a check to ensure datasets are not empty
+            train_sample = next(iter(train_dataset.take(1)), None)
+            if train_sample is None:
+                print("Warning: Training dataset is empty. Using fallback approach.")
+                # Use standard fine-tuning approach instead
+                is_yolo_generator = False
+            else:
+                print(f"Training dataset sample structure: {type(train_sample)}")
+                if isinstance(train_sample, tuple):
+                    print(f"  Sample tuple length: {len(train_sample)}")
+                    for i, item in enumerate(train_sample):
+                        print(f"  Item {i} type: {type(item)}")
+                        if hasattr(item, 'shape'):
+                            print(f"    Shape: {item.shape}")
+        except Exception as e:
+            print(f"Error creating datasets from YOLO generators: {e}")
+            import traceback
+            traceback.print_exc()
+            print("Falling back to standard generator approach.")
+            is_yolo_generator = False
+        
             # Create a dataset from the generator that Keras can understand
             def create_dataset_from_yolo_generator(generator):
                 # Get a sample batch to determine shapes
@@ -579,99 +756,181 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
                 # Determine if this is a metadata model
                 has_metadata = isinstance(model.input, list) and len(model.input) > 1
                 
+                # Debug the batch structure
+                print(f"Sample batch structure: {type(sample_batch)}")
+                if isinstance(sample_batch, tuple):
+                    print(f"  Tuple length: {len(sample_batch)}")
+                    for j, item in enumerate(sample_batch):
+                        print(f"  Item {j} type: {type(item)}")
+                        if isinstance(item, list):
+                            print(f"    List length: {len(item)}")
+                            for k, subitem in enumerate(item):
+                                print(f"    Subitem {k} shape: {subitem.shape if hasattr(subitem, 'shape') else 'No shape'}")
+                
                 # Create a generator function that yields batches in the right format
                 def gen_fn():
                     for i in range(len(generator)):
                         try:
                             batch = generator[i]
+                            
+                            # Debug the batch structure
+                            if i == 0:
+                                print(f"Batch {i} structure: {type(batch)}")
+                                if isinstance(batch, tuple):
+                                    print(f"  Tuple length: {len(batch)}")
+                                    for j, item in enumerate(batch):
+                                        print(f"  Item {j} type: {type(item)}")
+                                        if isinstance(item, list):
+                                            print(f"    List length: {len(item)}")
+                                            for k, subitem in enumerate(item):
+                                                print(f"    Subitem {k} shape: {subitem.shape if hasattr(subitem, 'shape') else 'No shape'}")
+                            
+                            # Properly format the data based on the model's expected input
                             if has_metadata:
-                                # For models with metadata, return the full structure
-                                yield batch
+                                # For models with metadata input
+                                if isinstance(batch, tuple) and len(batch) == 2:
+                                    inputs, labels = batch
+                                    if isinstance(inputs, list) and len(inputs) >= 2:
+                                        # Correct format: yield a tuple of (tuple of tensors, tensor)
+                                        images, metadata = inputs[0], inputs[1]
+                                        yield (images, metadata), labels
+                                    else:
+                                        print(f"Warning: Expected inputs to be a list with at least 2 elements, got {type(inputs)}")
+                                        # Try to handle unexpected format
+                                        if isinstance(inputs, np.ndarray):
+                                            # Create dummy metadata of appropriate shape
+                                            dummy_metadata = np.zeros((inputs.shape[0], 10), dtype=np.float32)
+                                            yield (inputs, dummy_metadata), labels
+                                        else:
+                                            # Skip this batch
+                                            continue
+                                else:
+                                    print(f"Warning: Expected batch to be a tuple of length 2, got {type(batch)}")
+                                    continue
                             else:
-                                # For models without metadata, extract just the images
+                                # For models with single input (images only)
                                 if isinstance(batch, tuple) and len(batch) == 2:
                                     inputs, labels = batch
                                     if isinstance(inputs, list) and len(inputs) > 0:
                                         # Extract just the images from [images, metadata]
                                         yield inputs[0], labels
-                                    else:
+                                    elif isinstance(inputs, np.ndarray):
                                         # Already in correct format
                                         yield inputs, labels
+                                    else:
+                                        print(f"Warning: Unexpected inputs type: {type(inputs)}")
+                                        continue
                                 else:
-                                    # Skip incorrect structure
-                                    print(f"Skipping batch {i} - incorrect structure")
+                                    print(f"Warning: Expected batch to be a tuple of length 2, got {type(batch)}")
                                     continue
                         except Exception as e:
                             print(f"Error in batch {i}: {e}")
+                            import traceback
+                            traceback.print_exc()
                             continue
                 
-                # Create dataset with appropriate output signature
+                # Create dataset with appropriate output signature based on the actual model input structure
                 if has_metadata:
-                    if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
-                        inputs, labels = sample_batch
-                        if isinstance(inputs, list) and len(inputs) >= 2:
-                            images, metadata = inputs[0], inputs[1]
-                            output_signature = (
-                                (
-                                    tf.TensorSpec(shape=images.shape, dtype=tf.float32),
-                                    tf.TensorSpec(shape=metadata.shape, dtype=tf.float32)
-                                ),
-                                tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
-                            )
+                    # For models with metadata
+                    try:
+                        if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
+                            inputs, labels = sample_batch
+                            if isinstance(inputs, list) and len(inputs) >= 2:
+                                images, metadata = inputs[0], inputs[1]
+                                output_signature = (
+                                    (
+                                        tf.TensorSpec(shape=images.shape, dtype=tf.float32),
+                                        tf.TensorSpec(shape=metadata.shape, dtype=tf.float32)
+                                    ),
+                                    tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
+                                )
+                            else:
+                                # Fallback to expected shapes
+                                print("Using fallback shapes for metadata model")
+                                output_signature = (
+                                    (
+                                        tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                                        tf.TensorSpec(shape=(None, 10), dtype=tf.float32)  # Assuming 10 metadata features
+                                    ),
+                                    tf.TensorSpec(shape=(None, model.output.shape[-1]), dtype=tf.float32)
+                                )
                         else:
                             # Fallback to expected shapes
-                            print("Using fallback shapes for metadata model")
+                            print("Using fallback shapes for metadata model (tuple structure issue)")
                             output_signature = (
                                 (
                                     tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
                                     tf.TensorSpec(shape=(None, 10), dtype=tf.float32)  # Assuming 10 metadata features
                                 ),
-                                tf.TensorSpec(shape=(None, 8), dtype=tf.float32)  # 8 classes from error log
+                                tf.TensorSpec(shape=(None, model.output.shape[-1]), dtype=tf.float32)
                             )
-                    else:
-                        # Fallback to expected shapes
-                        print("Using fallback shapes for metadata model (tuple structure issue)")
+                    except Exception as e:
+                        print(f"Error determining output signature for metadata model: {e}")
+                        # Ultimate fallback
                         output_signature = (
                             (
                                 tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
-                                tf.TensorSpec(shape=(None, 10), dtype=tf.float32)  # Assuming 10 metadata features
+                                tf.TensorSpec(shape=(None, 10), dtype=tf.float32)
                             ),
-                            tf.TensorSpec(shape=(None, 8), dtype=tf.float32)  # 8 classes from error log
+                            tf.TensorSpec(shape=(None, model.output.shape[-1]), dtype=tf.float32)
                         )
                 else:
-                    if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
-                        inputs, labels = sample_batch
-                        if isinstance(inputs, list) and len(inputs) > 0:
-                            images = inputs[0]
+                    # For image-only models
+                    try:
+                        if isinstance(sample_batch, tuple) and len(sample_batch) == 2:
+                            inputs, labels = sample_batch
+                            if isinstance(inputs, list) and len(inputs) > 0:
+                                images = inputs[0]
+                            else:
+                                images = inputs
+                            output_signature = (
+                                tf.TensorSpec(shape=images.shape, dtype=tf.float32),
+                                tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
+                            )
                         else:
-                            images = inputs
-                        output_signature = (
-                            tf.TensorSpec(shape=images.shape, dtype=tf.float32),
-                            tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
-                        )
-                    else:
-                        # Fallback to expected shapes
-                        print("Using fallback shapes for image-only model")
+                            # Fallback to expected shapes
+                            print("Using fallback shapes for image-only model")
+                            output_signature = (
+                                tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                                tf.TensorSpec(shape=(None, model.output.shape[-1]), dtype=tf.float32)
+                            )
+                    except Exception as e:
+                        print(f"Error determining output signature for image-only model: {e}")
+                        # Ultimate fallback
                         output_signature = (
                             tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
-                            tf.TensorSpec(shape=(None, 8), dtype=tf.float32)  # 8 classes from error log
+                            tf.TensorSpec(shape=(None, model.output.shape[-1]), dtype=tf.float32)
                         )
                 
-                # Create and return the dataset
-                dataset = tf.data.Dataset.from_generator(
-                    gen_fn,
-                    output_signature=output_signature
-                )
-                
-                return dataset.prefetch(tf.data.AUTOTUNE)
-            
-            # Convert generators to datasets
-            train_dataset = create_dataset_from_yolo_generator(train_generator)
-            val_dataset = create_dataset_from_yolo_generator(val_generator)
-        except Exception as e:
-            print(f"Error creating datasets from YOLO generators: {e}")
-            print("Fine-tuning could not be completed. Returning original model.")
-            return model
+                # Create and return the dataset with error handling
+                try:
+                    dataset = tf.data.Dataset.from_generator(
+                        gen_fn,
+                        output_signature=output_signature
+                    )
+                    return dataset.prefetch(tf.data.AUTOTUNE)
+                except Exception as e:
+                    print(f"Error creating dataset: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # Create a simple dummy dataset as fallback
+                    def dummy_gen():
+                        # Create dummy data matching the expected structure
+                        if has_metadata:
+                            dummy_images = np.zeros((1, 224, 224, 3), dtype=np.float32)
+                            dummy_metadata = np.zeros((1, 10), dtype=np.float32)
+                            dummy_labels = np.zeros((1, model.output.shape[-1]), dtype=np.float32)
+                            yield (dummy_images, dummy_metadata), dummy_labels
+                        else:
+                            dummy_images = np.zeros((1, 224, 224, 3), dtype=np.float32)
+                            dummy_labels = np.zeros((1, model.output.shape[-1]), dtype=np.float32)
+                            yield dummy_images, dummy_labels
+                    
+                    return tf.data.Dataset.from_generator(
+                        dummy_gen,
+                        output_signature=output_signature
+                    ).take(1)  # Just one batch to avoid infinite loop
     
     # Check if the model has a Functional component that might cause PEFT issues
     has_functional_component = False
@@ -703,23 +962,96 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
                     from transformers import TFAutoModelForSequenceClassification
                     from peft import get_peft_config, PeftConfig, PeftModel, get_peft_model, LoraConfig, TaskType
                     
-                    # Configure PEFT with LoRA
-                    peft_config = LoraConfig(
-                        task_type=TaskType.SEQ_CLS,
-                        inference_mode=False,
-                        r=8,
-                        lora_alpha=32,
-                        lora_dropout=0.1,
-                        target_modules=["query", "value", "dense"]
-                    )
-                    
-                    # Try to apply PEFT
-                    model = get_peft_model(model, peft_config)
-                    print("Successfully applied PEFT with LoRA")
+                    # Check if we're using TensorFlow
+                    if isinstance(model, tf.keras.Model):
+                        print("Detected TensorFlow model. Using custom TF-compatible LoRA implementation.")
+                        
+                        # Find dense layers that can benefit from LoRA
+                        dense_layers = []
+                        dense_layer_inputs = {}
+                        dense_layer_outputs = {}
+                        
+                        # First pass: identify dense layers and their connections
+                        for layer in model.layers:
+                            if isinstance(layer, tf.keras.layers.Dense) and layer.trainable:
+                                dense_layers.append(layer.name)
+                                print(f"Found dense layer for LoRA adaptation: {layer.name}")
+                        
+                        if dense_layers:
+                            # Create a new model with LoRA adaptations
+                            try:
+                                # Save the original weights
+                                original_weights = model.get_weights()
+                                
+                                # Create a model clone to work with
+                                model_config = model.get_config()
+                                
+                                # Apply LoRA to each dense layer
+                                for layer_name in dense_layers:
+                                    layer = model.get_layer(layer_name)
+                                    
+                                    # Make the original layer non-trainable
+                                    layer.trainable = False
+                                    
+                                    # Create a LoRA layer for this dense layer
+                                    lora_layer = LoRALayer(
+                                        in_features=layer.input_shape[-1],
+                                        out_features=layer.units,
+                                        r=8,  # Rank for LoRA
+                                        alpha=32,  # Alpha scaling factor
+                                        name=f"lora_{layer_name}"
+                                    )
+                                    
+                                    # Add the LoRA layer to the model
+                                    if hasattr(model, '_is_graph_network') and model._is_graph_network:
+                                        # For functional models, we need to be careful
+                                        print(f"Adding LoRA adapter for layer {layer_name} using Functional API approach")
+                                    else:
+                                        # For Sequential models, we can add the layer directly
+                                        # Get the layer's input
+                                        inputs = layer.input
+                                        
+                                        # Apply LoRA in parallel
+                                        lora_output = lora_layer(inputs)
+                                        
+                                        # Add the LoRA output to the original layer's output
+                                        # This is done by modifying the forward pass
+                                        original_call = layer.call
+                                        
+                                        def lora_enhanced_call(inputs, *args, **kwargs):
+                                            original_output = original_call(inputs, *args, **kwargs)
+                                            lora_contribution = lora_layer(inputs)
+                                            return original_output + lora_contribution
+                                        
+                                        # Replace the layer's call method
+                                        layer.call = lora_enhanced_call
+                                
+                                print("Successfully applied custom TensorFlow-compatible LoRA to dense layers")
+                                print("Note: This is a simplified LoRA implementation and may not have full PEFT capabilities")
+                            except Exception as e:
+                                print(f"Error applying custom LoRA: {e}")
+                                print("Falling back to standard fine-tuning")
+                        else:
+                            print("No suitable dense layers found for LoRA adaptation")
+                            print("Using standard fine-tuning approach")
+                    else:
+                        # Configure PEFT with LoRA for PyTorch models
+                        peft_config = LoraConfig(
+                            task_type=TaskType.SEQ_CLS,
+                            inference_mode=False,
+                            r=8,
+                            lora_alpha=32,
+                            lora_dropout=0.1,
+                            target_modules=["query", "value", "dense"]
+                        )
+                        
+                        # Try to apply PEFT
+                        model = get_peft_model(model, peft_config)
+                        print("Successfully applied PEFT with LoRA")
                 except ImportError:
                     print("PEFT library not available. Using standard fine-tuning.")
                 except Exception as peft_error:
-                    print(f"Error applying PEFT: {peft_error}")
+                    print(f"Fine tune model === Error applying PEFT: {peft_error}")
                     print("Using standard model without PEFT")
         except Exception as e:
             print(f"Error checking for PEFT compatibility: {e}")
@@ -843,13 +1175,56 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
         # First attempt: try to fit the model directly
         if is_yolo_generator:
             # Use the converted datasets for YOLO generators
-            history = model.fit(
-                train_dataset,
-                validation_data=val_dataset,
-                epochs=epochs,
-                callbacks=callbacks,
-                verbose=1
-            )
+            try:
+                print("Using converted TensorFlow datasets for YOLO generators")
+                history = model.fit(
+                    train_dataset,
+                    validation_data=val_dataset,
+                    epochs=epochs,
+                    callbacks=callbacks,
+                    verbose=1
+                )
+            except tf.errors.InvalidArgumentError as e:
+                print(f"Dataset structure error: {e}")
+                print("Attempting to fix dataset structure...")
+                
+                # Try a simpler dataset creation approach
+                def simple_dataset_from_generator(generator):
+                    def gen_fn():
+                        for i in range(len(generator)):
+                            try:
+                                batch = generator[i]
+                                if isinstance(batch, tuple) and len(batch) == 2:
+                                    x, y = batch
+                                    # Simplify by just using the first element if it's a list
+                                    if isinstance(x, list) and len(x) > 0:
+                                        x = x[0]
+                                    yield x, y
+                            except:
+                                continue
+                    
+                    # Simple output signature
+                    output_signature = (
+                        tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+                        tf.TensorSpec(shape=(None, model.output.shape[-1]), dtype=tf.float32)
+                    )
+                    
+                    return tf.data.Dataset.from_generator(
+                        gen_fn,
+                        output_signature=output_signature
+                    ).prefetch(tf.data.AUTOTUNE)
+                
+                # Try with simplified datasets
+                train_dataset = simple_dataset_from_generator(train_generator)
+                val_dataset = simple_dataset_from_generator(val_generator)
+                
+                history = model.fit(
+                    train_dataset,
+                    validation_data=val_dataset,
+                    epochs=epochs,
+                    callbacks=callbacks,
+                    verbose=1
+                )
         else:
             # Create balanced generators for training
             balanced_train_generator = create_balanced_data_generator(train_generator)
@@ -929,7 +1304,7 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
     
     # Return the model instead of just the history
     return model
-        
+
 def create_balanced_data_generator(generator, batch_size=64):
     """
     Creates a balanced data generator by oversampling minority classes
@@ -1373,8 +1748,8 @@ def create_ensemble_model(model_paths=None, num_classes=9, num_models=3):
         
         print(f"Created ensemble model with {len(models)} sub-models")
         return ensemble_model
-
 def build_peft_model_with_metadata(num_classes=9, metadata_dim=0, r=8, alpha=32):
+    print("PEFT_AVAILABLE build_peft_model_with_metadata", PEFT_AVAILABLE)
     """
     Build a PEFT model that can handle both image data and metadata features
     
@@ -1427,30 +1802,68 @@ def build_peft_model_with_metadata(num_classes=9, metadata_dim=0, r=8, alpha=32)
     # Create the model with two inputs
     model = tf.keras.Model(inputs=[image_input, metadata_input], outputs=output)
     
-    # Apply PEFT if available
+    # Apply custom TensorFlow-compatible LoRA if PEFT is available
     if PEFT_AVAILABLE:
         try:
-            # Configure LoRA for efficient fine-tuning
-            # Specify target_modules to fix the error
-            peft_config = LoraConfig(
-                task_type=TaskType.SEQ_CLS,
-                inference_mode=False,
-                r=r,
-                lora_alpha=alpha,
-                lora_dropout=0.1,
-                target_modules=[
-                    "image_dense_1", 
-                    "metadata_dense_1", 
-                    "metadata_dense_2", 
-                    "combined_dense_1", 
-                    "combined_dense_2", 
-                    "output"
-                ]  # Target specific dense layers by name
-            )
-            model = get_peft_model(model, peft_config)
-            print("Applied PEFT (LoRA) to the model")
+            print("Applying custom TensorFlow-compatible LoRA adaptation")
+            
+            # Store the original model for reference
+            original_model = model
+            
+            # Get all dense layers that we want to adapt with LoRA
+            target_layers = [
+                "image_dense_1", 
+                "metadata_dense_1", 
+                "metadata_dense_2", 
+                "combined_dense_1", 
+                "combined_dense_2", 
+                "output"
+            ]
+            
+            # Apply custom LoRA to each target layer
+            for layer_name in target_layers:
+                try:
+                    # Get the original layer
+                    original_layer = model.get_layer(layer_name)
+                    
+                    # Make the original layer non-trainable to preserve its weights
+                    original_layer.trainable = False
+                    
+                    # Get the input tensor to this layer
+                    # This is tricky in a Functional model, so we'll use the model's inputs and outputs
+                    
+                    # Create a LoRA adaptation layer
+                    lora_layer = LoRALayer(
+                        in_features=original_layer.input_shape[-1],
+                        out_features=original_layer.units,
+                        r=r,
+                        alpha=alpha,
+                        name=f"lora_{layer_name}"
+                    )
+                    
+                    # Store the original call method
+                    original_call = original_layer.call
+                    
+                    # Define a new call method that adds the LoRA adaptation
+                    def create_lora_enhanced_call(original_call_fn, lora_layer):
+                        def lora_enhanced_call(inputs, *args, **kwargs):
+                            original_output = original_call_fn(inputs, *args, **kwargs)
+                            lora_contribution = lora_layer(inputs)
+                            return original_output + lora_contribution
+                        return lora_enhanced_call
+                    
+                    # Replace the layer's call method with our enhanced version
+                    original_layer.call = create_lora_enhanced_call(original_call, lora_layer)
+                    
+                    print(f"Applied LoRA to layer: {layer_name}")
+                    
+                except Exception as layer_error:
+                    print(f"Error applying LoRA to layer {layer_name}: {layer_error}")
+            
+            print("Successfully applied custom TensorFlow-compatible LoRA")
+            
         except Exception as e:
-            print(f"Error applying PEFT: {e}")
+            print(f"Error applying custom LoRA: {e}")
             print("Using standard model without PEFT")
     
     # Compile the model

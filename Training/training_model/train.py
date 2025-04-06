@@ -60,10 +60,10 @@ def main():
     set_memory_growth()
     
     # Define paths
-    csv_path = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/data/ISIC_2019_Training_GroundTruth.csv"
-    metadata_csv_path = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/data/ISIC_2019_Training_Metadata.csv"
-    image_dir = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/data/exp"
-    labels_dir = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/data/exp/labels"
+    csv_path = "/kaggle/input/2019-isic-csv/ISIC_2019_Training_GroundTruth.csv"
+    metadata_csv_path = "/kaggle/input/2019-isic-csv/ISIC_2019_Training_Metadata.csv"
+    image_dir = "/kaggle/input/2019-isic/exp"
+    labels_dir = "/kaggle/input/2019-isic/exp/labels"
     
     # Create data generators with metadata
     train_generator, val_generator, class_indices = create_yolo_generators(

@@ -619,11 +619,14 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
     # Read the CSV file for diagnosis information
     df = pd.read_csv(csv_path)
 
-    # Get all PNG images from the detection directory
+    # Get all images from the detection directory
     image_files = glob.glob(os.path.join(image_dir, "*.jpg"))
 
     # Create a new dataframe for detected images
     detected_data = []
+
+    # Define diagnosis columns based on the ISIC dataset
+    diagnosis_columns = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC']
 
     for img_path in image_files:
         # Extract image name from path
@@ -637,7 +640,6 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
             continue
 
         # Find the original entry in the CSV
-        # Change 'image_name' to 'image' to match the CSV column name
         original_entry = df[df["image"] == img_name]
         
         # Skip if no matching entry in CSV
@@ -650,15 +652,25 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
 
         # Parse label content (class x_center y_center width height confidence)
         if len(label_content) >= 5:  # Ensure we have at least the basic bbox info
+            # Determine the diagnosis by finding which column has value 1.0
+            diagnosis = None
+            for col in diagnosis_columns:
+                if col in original_entry.columns and original_entry[col].values[0] == 1.0:
+                    diagnosis = col
+                    break
+            
+            # If no diagnosis found, skip this image
+            if diagnosis is None:
+                continue
+                
             # Add to detected data
-            detected_data.append(
-                {
-                    "image_name": img_name,
-                    "diagnosis": original_entry["diagnosis"].values[0],
-                    "benign_malignant": original_entry["benign_malignant"].values[0],
-                    "target": original_entry["target"].values[0],
-                }
-            )
+            detected_data.append({
+                "image_name": img_name,
+                "diagnosis": diagnosis,
+                # We don't have these columns, so commenting them out
+                # "benign_malignant": original_entry["benign_malignant"].values[0],
+                # "target": original_entry["target"].values[0],
+            })
 
     # Create dataframe from detected data
     detected_df = pd.DataFrame(detected_data)
@@ -666,35 +678,40 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
     print("Dataset Statistics:")
     print("-" * 50)
     print(f"Total number of detected images: {len(detected_df)}")
-    print("\nDiagnosis distribution:")
-    diagnosis_counts = detected_df["diagnosis"].value_counts()
-    print(diagnosis_counts)
+    
+    if len(detected_df) > 0:
+        print("\nDiagnosis distribution:")
+        diagnosis_counts = detected_df["diagnosis"].value_counts()
+        print(diagnosis_counts)
 
-    print("\nClasses with less than 2 samples:")
-    print(diagnosis_counts[diagnosis_counts < 2])
+        print("\nClasses with less than 2 samples:")
+        print(diagnosis_counts[diagnosis_counts < 2])
 
-    print("\nBenign/Malignant distribution:")
-    print(detected_df["benign_malignant"].value_counts())
+        # Calculate class weights for imbalanced data (only for classes with enough samples)
+        valid_classes = diagnosis_counts[diagnosis_counts >= 2].index
+        if len(valid_classes) > 0:
+            valid_df = detected_df[detected_df["diagnosis"].isin(valid_classes)]
+            
+            class_weights = compute_class_weight(
+                "balanced", classes=np.unique(valid_df["diagnosis"]), y=valid_df["diagnosis"]
+            )
 
-    # Calculate class weights for imbalanced data (only for classes with enough samples)
-    valid_classes = diagnosis_counts[diagnosis_counts >= 2].index
-    valid_df = detected_df[detected_df["diagnosis"].isin(valid_classes)]
-
-    class_weights = compute_class_weight(
-        "balanced", classes=np.unique(valid_df["diagnosis"]), y=valid_df["diagnosis"]
-    )
-
-    print("class_weights data_preprocessing", class_weights)
-    print(
-        "dict(zip(np.unique(valid_df['diagnosis']), class_weights))",
-        dict(zip(np.unique(valid_df["diagnosis"]), class_weights)),
-    )
-
+            print("Class weights for handling imbalance:")
+            print(dict(zip(np.unique(valid_df["diagnosis"]), class_weights)))
+            
+            return {
+                "class_weights": dict(zip(np.unique(valid_df["diagnosis"]), class_weights)),
+                "n_classes": len(valid_classes),
+                "dataset_size": len(detected_df),  # Total number of images
+                "valid_dataset_size": len(valid_df),  # Number of images in valid classes
+            }
+    
+    # Return empty dict if no valid data
     return {
-        "class_weights": dict(zip(np.unique(valid_df["diagnosis"]), class_weights)),
-        "n_classes": len(valid_classes),
-        "dataset_size": len(detected_df),  # Total number of images
-        "valid_dataset_size": len(valid_df),  # Number of images in valid classes
+        "class_weights": {},
+        "n_classes": 0,
+        "dataset_size": 0,
+        "valid_dataset_size": 0,
     }
 
 

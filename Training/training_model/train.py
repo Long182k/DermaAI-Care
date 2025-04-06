@@ -9,7 +9,7 @@ import mlflow
 # Import custom modules
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
 from src.model_training import build_peft_model, train_model, fine_tune_model, setup_gpu, log_model_to_mlflow
-from src.evaluate_model import evaluate_model  # Add this import at the top
+from src.evaluate_model import evaluate_model  # Make sure this import is correct
 
 # Define model save paths
 MODEL_SAVE_PATH = "/kaggle/working/DermaAI-Care/Training/training_model/models/skin_cancer_prediction_model.keras"

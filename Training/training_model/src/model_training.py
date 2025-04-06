@@ -120,9 +120,15 @@ def focal_loss(gamma=2.0, alpha=0.25):
     return focal_loss_fixed
 
 # Modify the model compilation in build_peft_model function
-def build_peft_model(num_classes, r=8, alpha=32):
+def build_peft_model(num_classes, r=8, alpha=32, multi_label=False):
     """
     Build and compile the model with PEFT (LoRA) optimizations and memory efficiency
+    
+    Args:
+        num_classes: Number of output classes
+        r: Rank of the low-rank adaptation matrices
+        alpha: Scaling factor for the adaptation
+        multi_label: Whether to use multi-label classification (sigmoid activation)
     """
     # Enable mixed precision for faster training and lower memory usage
     set_global_policy('mixed_float16')
@@ -154,20 +160,36 @@ def build_peft_model(num_classes, r=8, alpha=32):
         combined = tf.keras.layers.Add()([dense_output, lora_adaptation])
         
         x = Dropout(0.5)(combined)
-        outputs = Dense(num_classes, activation='softmax', kernel_initializer='he_normal')(x)
+        
+        # Use sigmoid activation for multi-label, softmax for single-label
+        final_activation = 'sigmoid' if multi_label else 'softmax'
+        outputs = Dense(num_classes, activation=final_activation, kernel_initializer='he_normal')(x)
         
         model = Model(inputs=inputs, outputs=outputs)
         
-        # Compile the model with memory-efficient settings and proper metrics for TF 2.17+
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-            loss=focal_loss(gamma=2.0, alpha=0.25),  # Use focal loss instead of categorical_crossentropy
-            metrics=[
+        # Choose appropriate loss and metrics based on the task
+        if multi_label:
+            loss = tf.keras.losses.BinaryCrossentropy()
+            metrics = [
+                tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+                tf.keras.metrics.AUC(name='auc', multi_label=True),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        else:
+            loss = focal_loss(gamma=2.0, alpha=0.25)
+            metrics = [
                 'accuracy',
                 tf.keras.metrics.AUC(name='auc', from_logits=False),
                 tf.keras.metrics.Precision(name='precision'),
                 tf.keras.metrics.Recall(name='recall')
             ]
+        
+        # Compile the model with memory-efficient settings and proper metrics
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss=loss,
+            metrics=metrics
         )
         
         return model
@@ -306,11 +328,18 @@ def train_model(
             # Calculate binary crossentropy
             bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
             
-            # Calculate weight for each sample based on its labels
-            sample_weights = tf.reduce_sum(y_true * class_weights_tensor, axis=-1)
+            # Apply weights based on the true classes in each sample
+            # Use broadcasting to apply weights to each sample/class
+            weights = tf.reduce_sum(y_true * class_weights_tensor, axis=-1)
             
-            # Apply weights to loss
-            return bce * sample_weights
+            # Reshape weights to match bce shape for broadcasting
+            weights = tf.reshape(weights, [-1, 1])
+            
+            # Calculate weighted loss - use direct multiplication
+            weighted_loss = bce * weights
+            
+            # Return mean loss
+            return tf.reduce_mean(weighted_loss)
         
         # Recompile the model with our custom loss
         metrics = model.metrics
@@ -328,7 +357,7 @@ def train_model(
             validation_data=val_data,
             epochs=epochs,
             callbacks=callbacks,
-            class_weight=None if multi_label else class_weights,  # We use our custom loss for multi-label
+            class_weight=None,  # Always use None, we handle weights in custom loss
             verbose=1
         )
         return history
@@ -506,67 +535,84 @@ def fine_tune_model(
     """
     print("Starting fine-tuning process...")
     
-    # Unfreeze the last few layers of the base model
-    base_model = model.layers[1]  # Get the InceptionResNetV2 model
-    for layer in base_model.layers[-30:]:  # Unfreeze last 30 layers
-        layer.trainable = True
+    # Clear session to avoid strategy mixing issues
+    tf.keras.backend.clear_session()
     
-    # Set up monitoring metrics based on task type
+    # Create a clone of the model to avoid strategy mixing issues
+    model_config = model.get_config()
+    weights = model.get_weights()
+    
+    # Recreate the model with the current strategy
+    with strategy.scope():
+        new_model = tf.keras.Model.from_config(model_config)
+        new_model.set_weights(weights)
+        
+        # Unfreeze the last few layers of the base model
+        base_model = new_model.layers[1]  # Get the InceptionResNetV2 model
+        for layer in base_model.layers[-30:]:  # Unfreeze last 30 layers
+            layer.trainable = True
+        
+        # For multi-label classification with class weights, we need a custom loss
+        if multi_label and class_weights:
+            # Create a weighted binary crossentropy loss
+            def weighted_binary_crossentropy(y_true, y_pred):
+                # Create per-class weights tensor
+                class_weights_tensor = tf.constant(
+                    [class_weights.get(i, 1.0) for i in range(y_true.shape[-1])],
+                    dtype=tf.float32
+                )
+                
+                # Calculate binary crossentropy
+                bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+                
+                # Apply weights based on the true classes in each sample
+                weights = tf.reduce_sum(y_true * class_weights_tensor, axis=-1)
+                
+                # Reshape weights to match bce shape for broadcasting
+                weights = tf.reshape(weights, [-1, 1])
+                
+                # Calculate weighted loss
+                weighted_loss = bce * weights
+                
+                # Return mean loss
+                return tf.reduce_mean(weighted_loss)
+            
+            loss = weighted_binary_crossentropy
+            print("Using weighted binary crossentropy for multi-label fine-tuning")
+        elif multi_label:
+            loss = tf.keras.losses.BinaryCrossentropy()
+            print("Using binary crossentropy for multi-label fine-tuning")
+        else:
+            loss = focal_loss(gamma=2.0, alpha=0.25)
+            print("Using focal loss for single-label fine-tuning")
+        
+        # Set up appropriate metrics based on task type
+        if multi_label:
+            metrics = [
+                tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+                tf.keras.metrics.AUC(name='auc', multi_label=True),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        else:
+            metrics = [
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc', from_logits=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        
+        # Compile the model with appropriate loss and metrics
+        new_model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),  # Lower learning rate for fine-tuning
+            loss=loss,
+            metrics=metrics
+        )
+    
+    # Set up callbacks for fine-tuning
     monitor_metric = 'val_loss' if multi_label else 'val_accuracy'
     mode = 'min' if monitor_metric == 'val_loss' else 'max'
     
-    # For multi-label classification with class weights, we need a custom loss
-    if multi_label and class_weights:
-        # Create a weighted binary crossentropy loss
-        def weighted_binary_crossentropy(y_true, y_pred):
-            # Create per-class weights tensor
-            class_weights_tensor = tf.constant(
-                [class_weights.get(i, 1.0) for i in range(y_true.shape[-1])],
-                dtype=tf.float32
-            )
-            
-            # Calculate binary crossentropy
-            bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
-            
-            # Calculate weight for each sample based on its labels
-            sample_weights = tf.reduce_sum(y_true * class_weights_tensor, axis=-1)
-            
-            # Apply weights to loss
-            return bce * sample_weights
-        
-        loss = weighted_binary_crossentropy
-        print("Using weighted binary crossentropy for multi-label fine-tuning")
-    elif multi_label:
-        loss = tf.keras.losses.BinaryCrossentropy()
-        print("Using binary crossentropy for multi-label fine-tuning")
-    else:
-        loss = focal_loss(gamma=2.0, alpha=0.25)
-        print("Using focal loss for single-label fine-tuning")
-    
-    # Set up appropriate metrics based on task type
-    if multi_label:
-        metrics = [
-            tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-            tf.keras.metrics.AUC(name='auc', multi_label=True),
-            tf.keras.metrics.Precision(name='precision'),
-            tf.keras.metrics.Recall(name='recall')
-        ]
-    else:
-        metrics = [
-            'accuracy',
-            tf.keras.metrics.AUC(name='auc', from_logits=False),
-            tf.keras.metrics.Precision(name='precision'),
-            tf.keras.metrics.Recall(name='recall')
-        ]
-    
-    # Recompile the model with appropriate loss and metrics
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),  # Lower learning rate for fine-tuning
-        loss=loss,
-        metrics=metrics
-    )
-    
-    # Set up callbacks for fine-tuning
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor=monitor_metric,
@@ -594,14 +640,22 @@ def fine_tune_model(
     
     # Fine-tune the model
     try:
-        history = model.fit(
+        history = new_model.fit(
             train_generator,
             validation_data=val_generator,
             epochs=epochs,
             callbacks=callbacks,
-            class_weight=None if multi_label else class_weights,  # We handle multi-label weights in the loss
+            class_weight=None,  # We handle weights in the loss function
             verbose=1
         )
+        
+        # Copy weights back to original model to maintain the reference
+        model.set_weights(new_model.get_weights())
+        
+        # Clear up memory
+        del new_model
+        gc.collect()
+        
         return history
     except Exception as e:
         print(f"Error during fine-tuning: {e}")

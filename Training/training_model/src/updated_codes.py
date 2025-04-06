@@ -1,4 +1,3 @@
-# Modify the model compilation in build_peft_model function
 def build_peft_model(num_classes=9, r=8, alpha=32):
     """
     Build and compile the model with PEFT (LoRA) optimizations and memory efficiency
@@ -52,14 +51,14 @@ def build_peft_model(num_classes=9, r=8, alpha=32):
         if PEFT_AVAILABLE:
             try:
                 # Configure LoRA for efficient fine-tuning
-                # Specify target_modules to fix the error
+                # Specify target_modules to fix the error - use specific layer names
                 peft_config = LoraConfig(
                     task_type=TaskType.SEQ_CLS,
                     inference_mode=False,
                     r=r,
                     lora_alpha=alpha,
                     lora_dropout=0.1,
-                    target_modules=["dense", "Dense"]  # Target dense layers for adaptation
+                    target_modules=["dense_1", "lora_adaptation", "predictions"]  # Target specific layers by name
                 )
                 model = get_peft_model(model, peft_config)
                 print("Applied PEFT (LoRA) to the model")
@@ -81,8 +80,6 @@ def build_peft_model(num_classes=9, r=8, alpha=32):
         
         return model
 
-
-# Modify the train_model function to better handle class imbalance
 def train_model(model, train_data, val_data, epochs, early_stopping_patience, reduce_lr_patience, 
                 class_weights, train_class_indices, use_datasets=False, 
                 class_weight_multiplier=3.0, use_focal_loss=True, learning_rate=0.0001):
@@ -187,8 +184,80 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
     
     # Train the model with proper error handling
     try:
-        # Handle different types of input data
-        if use_datasets:
+        # Check if we're dealing with a YOLODetectionGenerator before deciding on training approach
+        is_yolo_generator = hasattr(train_data, '__class__') and 'YOLODetectionGenerator' in train_data.__class__.__name__
+        
+        if is_yolo_generator:
+            print("Detected YOLODetectionGenerator. Converting to tf.data.Dataset for compatibility")
+            
+            # Create a dataset from the generator that Keras can understand
+            def create_dataset_from_yolo_generator(generator, batch_size):
+                # Get a sample batch to determine shapes
+                sample_batch = generator[0]
+                
+                # Determine if this is a metadata model
+                has_metadata = isinstance(model.input, list) and len(model.input) > 1
+                
+                # Create a generator function that yields batches in the right format
+                def gen_fn():
+                    for i in range(len(generator)):
+                        try:
+                            batch = generator[i]
+                            if has_metadata:
+                                # For models with metadata, return the full structure
+                                yield batch
+                            else:
+                                # For models without metadata, extract just the images
+                                [images, _], labels = batch
+                                yield images, labels
+                        except Exception as e:
+                            print(f"Error in batch {i}: {e}")
+                            # Return a dummy batch with correct shapes
+                            if has_metadata:
+                                [images, metadata], labels = sample_batch
+                                yield [np.zeros_like(images), np.zeros_like(metadata)], np.zeros_like(labels)
+                            else:
+                                [images, _], labels = sample_batch
+                                yield np.zeros_like(images), np.zeros_like(labels)
+                
+                # Create dataset with appropriate output signature
+                if has_metadata:
+                    [images, metadata], labels = sample_batch
+                    output_signature = (
+                        (
+                            tf.TensorSpec(shape=images.shape, dtype=tf.float32),
+                            tf.TensorSpec(shape=metadata.shape, dtype=tf.float32)
+                        ),
+                        tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
+                    )
+                else:
+                    [images, _], labels = sample_batch
+                    output_signature = (
+                        tf.TensorSpec(shape=images.shape, dtype=tf.float32),
+                        tf.TensorSpec(shape=labels.shape, dtype=tf.float32)
+                    )
+                
+                # Create and return the dataset
+                dataset = tf.data.Dataset.from_generator(
+                    gen_fn,
+                    output_signature=output_signature
+                )
+                
+                return dataset.prefetch(tf.data.AUTOTUNE)
+            
+            # Convert generators to datasets
+            train_dataset = create_dataset_from_yolo_generator(train_data, args.batch_size if 'args' in globals() else 16)
+            val_dataset = create_dataset_from_yolo_generator(val_data, args.batch_size if 'args' in globals() else 16)
+            
+            # Train with the datasets
+            history = model.fit(
+                train_dataset,
+                validation_data=val_dataset,
+                epochs=epochs,
+                callbacks=callbacks,
+                verbose=1
+            )
+        elif use_datasets:
             # For tf.data.Dataset objects
             print("Using TensorFlow Datasets for training")
             history = model.fit(
@@ -199,75 +268,16 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
                 verbose=1
             )
         else:
-            # For Keras data generators and custom generators
-            print("Using data generators for training")
-            
-            # Check if we're dealing with a YOLODetectionGenerator
-            if hasattr(train_data, '__class__') and 'YOLODetectionGenerator' in train_data.__class__.__name__:
-                print("Detected YOLODetectionGenerator. Using direct fit with generator")
-                
-                # YOLODetectionGenerator returns [images, metadata], labels format
-                # Check if the model expects metadata
-                if isinstance(model.input, list) and len(model.input) > 1:
-                    print("Model accepts metadata input")
-                    # The generator already returns data in the correct format
-                    history = model.fit(
-                        train_data,
-                        validation_data=val_data,
-                        epochs=epochs,
-                        callbacks=callbacks,
-                        class_weight=class_weights if not use_focal_loss else None,
-                        verbose=1
-                    )
-                else:
-                    print("Model does not accept metadata, using only images")
-                    # Create a wrapper generator that only returns images
-                    class ImageOnlyWrapper(tf.keras.utils.Sequence):
-                        def __init__(self, generator):
-                            self.generator = generator
-                        
-                        def __len__(self):
-                            return len(self.generator)
-                        
-                        def __getitem__(self, idx):
-                            [images, _], labels = self.generator[idx]
-                            return images, labels
-                    
-                    # Wrap the generators
-                    train_wrapper = ImageOnlyWrapper(train_data)
-                    val_wrapper = ImageOnlyWrapper(val_data)
-                    
-                    history = model.fit(
-                        train_wrapper,
-                        validation_data=val_wrapper,
-                        epochs=epochs,
-                        callbacks=callbacks,
-                        class_weight=class_weights if not use_focal_loss else None,
-                        verbose=1
-                    )
-            # Check if we need to create a balanced generator
-            elif hasattr(train_data, 'class_counts') and sum(train_data.class_counts.values()) > 0:
-                print("Creating balanced data generator for training")
-                balanced_train_data = create_balanced_data_generator(train_data)
-                
-                history = model.fit(
-                    balanced_train_data,
-                    validation_data=val_data,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    class_weight=class_weights if not use_focal_loss else None,
-                    verbose=1
-                )
-            else:
-                # Standard training with the provided generator
-                history = model.fit(
-                    train_data,
-                    validation_data=val_data,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    class_weight=class_weights if not use_focal_loss else None,
-                    verbose=1
-                )
+            # For standard Keras data generators
+            print("Using standard data generators for training")
+            history = model.fit(
+                train_data,
+                validation_data=val_data,
+                epochs=epochs,
+                callbacks=callbacks,
+                class_weight=class_weights if not use_focal_loss else None,
+                verbose=1
+            )
         
         # Force garbage collection after training
         gc.collect()
@@ -275,117 +285,10 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
         return history
     except Exception as e:
         print(f"Error during training: {e}")
+        import traceback
         traceback.print_exc()
         
         # Force garbage collection on error
         gc.collect()
         
         return None
-
-
-
-def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices, metadata_used=False):
-    """
-    Log model and metrics to MLflow with proper signature and input example
-    
-    Args:
-        model: The model to log
-        history: Training history
-        model_name: Name of the model
-        fold_idx: Fold index for cross-validation
-        class_indices: Dictionary mapping class names to indices
-        metadata_used: Whether metadata was used in the model
-    """
-    try:
-        # Check if history is None (training failed)
-        if history is None:
-            print("Training history is None, logging model without metrics")
-            
-            # Set experiment
-            mlflow.set_experiment("skin-lesion-classification")
-            
-            # Start a new run
-            with mlflow.start_run(run_name=f"{model_name}_fold_{fold_idx}"):
-                # Log parameters
-                mlflow.log_param("model_name", model_name)
-                mlflow.log_param("fold_idx", fold_idx)
-                mlflow.log_param("num_classes", len(class_indices))
-                mlflow.log_param("class_mapping", class_indices)
-                mlflow.log_param("metadata_used", metadata_used)
-                mlflow.log_param("training_status", "failed")
-                
-                # Log the model architecture as YAML
-                try:
-                    model_config = model.to_json()
-                    with open(f"models/model_architecture_{fold_idx}.json", "w") as f:
-                        f.write(model_config)
-                    mlflow.log_artifact(f"models/model_architecture_{fold_idx}.json")
-                except Exception as e:
-                    print(f"Error logging model architecture: {e}")
-            
-            return
-        
-        # Set experiment
-        mlflow.set_experiment("skin-lesion-classification")
-        
-        # Start a new run
-        with mlflow.start_run(run_name=f"{model_name}_fold_{fold_idx}"):
-            # Log parameters
-            mlflow.log_param("model_name", model_name)
-            mlflow.log_param("fold_idx", fold_idx)
-            mlflow.log_param("num_classes", len(class_indices))
-            mlflow.log_param("class_mapping", class_indices)
-            mlflow.log_param("metadata_used", metadata_used)
-            mlflow.log_param("training_status", "completed")
-            
-            # Log metrics
-            for metric in ['accuracy', 'val_accuracy', 'loss', 'val_loss', 'auc', 'val_auc']:
-                if metric in history.history:
-                    # Log the final value
-                    mlflow.log_metric(f"final_{metric}", history.history[metric][-1])
-                    
-                    # Log the best value
-                    if 'val' in metric:
-                        if 'loss' in metric:
-                            best_value = min(history.history[metric])
-                        else:
-                            best_value = max(history.history[metric])
-                        mlflow.log_metric(f"best_{metric}", best_value)
-            
-            # Log the model with signature and input example
-            try:
-                # Save model to a temporary directory with proper .keras extension
-                model_path = f"models/temp_model_{fold_idx}.keras"
-                model.save(model_path)
-                
-                # Create an input example (dummy input with correct shape)
-                if metadata_used and isinstance(model.input, list):
-                    # For models with metadata, create appropriate input examples
-                    image_input = np.zeros((1, 224, 224, 3), dtype=np.float32)
-                    metadata_dim = model.input[1].shape[1]
-                    metadata_input = np.zeros((1, metadata_dim), dtype=np.float32)
-                    input_example = [image_input, metadata_input]
-                else:
-                    # For standard image-only models
-                    input_example = np.zeros((1, 224, 224, 3), dtype=np.float32)
-                
-                # Create model signature
-                signature = infer_signature(input_example, model.predict(input_example))
-                
-                # Log the model to MLflow with signature and input example
-                mlflow.tensorflow.log_model(
-                    model, 
-                    "model",
-                    signature=signature,
-                    input_example=input_example
-                )
-                
-                # Clean up
-                import shutil
-                if os.path.exists(model_path):
-                    os.remove(model_path)
-            except Exception as e:
-                print(f"Error logging model to MLflow: {e}")
-    
-    except Exception as e:
-        print(f"Error in MLflow logging: {e}")

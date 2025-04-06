@@ -135,19 +135,76 @@ def main():
         model = build_peft_model(num_classes=len(class_indices))
     
     # Train the model - pass additional parameters
-    history = train_model(
-        model=model,
-        train_data=train_generator,
-        val_data=val_generator,
-        epochs=args.epochs,
-        early_stopping_patience=args.early_stopping,
-        reduce_lr_patience=args.reduce_lr,
-        class_weights=class_weight_dict,
-        train_class_indices=class_indices,
-        class_weight_multiplier=args.class_weight_multiplier,
-        use_focal_loss=args.use_focal_loss,
-        learning_rate=args.learning_rate
-    )
+    try:
+        # Convert YOLODetectionGenerator to a format that Keras can understand
+        if hasattr(train_generator, '__class__') and 'YOLODetectionGenerator' in train_generator.__class__.__name__:
+            print("Converting YOLODetectionGenerator to tf.data.Dataset for compatibility")
+            
+            # Create wrapper functions to convert the generator output
+            def generator_wrapper(generator, batch_size):
+                def gen_fn():
+                    for i in range(len(generator)):
+                        batch = generator[i]
+                        # YOLODetectionGenerator returns ([images, metadata], labels)
+                        yield batch
+                
+                # Create dataset from generator
+                if isinstance(model.input, list):
+                    # For models with metadata input
+                    sample_batch = generator[0]
+                    dataset = tf.data.Dataset.from_generator(
+                        gen_fn,
+                        output_signature=(
+                            (
+                                tf.TensorSpec(shape=(batch_size, 224, 224, 3), dtype=tf.float32),
+                                tf.TensorSpec(shape=(batch_size, generator.metadata_dim), dtype=tf.float32)
+                            ),
+                            tf.TensorSpec(shape=(batch_size, len(class_indices)), dtype=tf.float32)
+                        )
+                    )
+                else:
+                    # For models without metadata input
+                    dataset = tf.data.Dataset.from_generator(
+                        gen_fn,
+                        output_signature=(
+                            tf.TensorSpec(shape=(batch_size, 224, 224, 3), dtype=tf.float32),
+                            tf.TensorSpec(shape=(batch_size, len(class_indices)), dtype=tf.float32)
+                        )
+                    )
+                
+                return dataset.prefetch(tf.data.AUTOTUNE)
+            
+            # Convert generators to datasets
+            train_data = generator_wrapper(train_generator, args.batch_size)
+            val_data = generator_wrapper(val_generator, args.batch_size)
+            
+            # Set use_datasets to True
+            use_datasets = True
+        else:
+            train_data = train_generator
+            val_data = val_generator
+            use_datasets = False
+        
+        # Train the model with the appropriate data format
+        history = train_model(
+            model=model,
+            train_data=train_data,
+            val_data=val_data,
+            epochs=args.epochs,
+            early_stopping_patience=args.early_stopping,
+            reduce_lr_patience=args.reduce_lr,
+            class_weights=class_weight_dict,
+            train_class_indices=class_indices,
+            use_datasets=use_datasets,  # Pass this flag to indicate dataset format
+            class_weight_multiplier=args.class_weight_multiplier,
+            use_focal_loss=args.use_focal_loss,
+            learning_rate=args.learning_rate
+        )
+    except Exception as e:
+        print(f"Error during training setup: {e}")
+        import traceback
+        traceback.print_exc()
+        history = None
     
     # Check if training was successful
     if history is not None:

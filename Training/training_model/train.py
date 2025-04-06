@@ -8,7 +8,7 @@ import mlflow
 
 # Import custom modules
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
-from src.model_training import build_peft_model, train_model, fine_tune_model, setup_gpu, log_model_to_mlflow, create_ensemble_model
+from src.model_training import build_peft_model,build_peft_model_with_metadata, train_model, fine_tune_model, setup_gpu, log_model_to_mlflow, create_ensemble_model
 from src.evaluate_model import evaluate_model, save_metrics_to_json  # Add save_metrics_to_json
 from sklearn.utils.class_weight import compute_class_weight  # Add this missing import
 

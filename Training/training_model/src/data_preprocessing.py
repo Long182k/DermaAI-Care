@@ -207,24 +207,67 @@ class YOLODetectionGenerator(tf.keras.utils.Sequence):
         return batch_x, batch_y
 
 
-def load_yolo_detections(
-    image_dir, labels_dir, csv_path, min_samples_per_class=5, n_folds=5
-):
+# Add this function to load and process metadata
+def load_metadata(metadata_csv_path):
     """
-    Load YOLO detected images with their corresponding labels and ground truth
+    Load and process metadata from ISIC dataset
+    
+    Args:
+        metadata_csv_path: Path to the metadata CSV file
+        
+    Returns:
+        Processed metadata DataFrame with encoded categorical features
+    """
+    # Load metadata
+    metadata_df = pd.read_csv(metadata_csv_path)
+    
+    # Fill missing values
+    metadata_df['age_approx'] = metadata_df['age_approx'].fillna(metadata_df['age_approx'].median())
+    metadata_df['anatom_site_general'] = metadata_df['anatom_site_general'].fillna('unknown')
+    metadata_df['sex'] = metadata_df['sex'].fillna('unknown')
+    
+    # Encode categorical features
+    # One-hot encode anatomical site
+    site_dummies = pd.get_dummies(metadata_df['anatom_site_general'], prefix='site')
+    
+    # One-hot encode sex
+    sex_dummies = pd.get_dummies(metadata_df['sex'], prefix='sex')
+    
+    # Normalize age to 0-1 range
+    metadata_df['age_normalized'] = metadata_df['age_approx'] / 100.0
+    
+    # Combine all features
+    processed_metadata = pd.concat([
+        metadata_df[['image']], 
+        metadata_df[['age_normalized']], 
+        site_dummies, 
+        sex_dummies
+    ], axis=1)
+    
+    print(f"Processed metadata with {len(processed_metadata)} entries and {processed_metadata.shape[1]} features")
+    return processed_metadata
+
+# Update the load_yolo_detections function to incorporate metadata
+def load_yolo_detections(image_dir, labels_dir, csv_path, metadata_csv_path, min_samples_per_class=5, n_folds=5):
+    """
+    Load YOLO detected images with their corresponding labels, ground truth, and metadata
     
     Args:
         image_dir: Directory containing the images
         labels_dir: Directory containing YOLO labels
         csv_path: Path to the ground truth CSV
+        metadata_csv_path: Path to the metadata CSV
         min_samples_per_class: Minimum samples required for a class to be included
         n_folds: Number of folds for cross-validation
         
     Returns:
-        DataFrame with image paths and labels, fold indices, and class mapping
+        DataFrame with image paths, labels, metadata, fold indices, and class mapping
     """
     # Load ground truth data
     gt_df = pd.read_csv(csv_path)
+    
+    # Load and process metadata
+    metadata_df = load_metadata(metadata_csv_path)
     
     # Get all image files from the directory
     image_files = glob.glob(os.path.join(image_dir, "*.jpg")) + glob.glob(os.path.join(image_dir, "*.jpeg"))
@@ -246,8 +289,18 @@ def load_yolo_detections(
     df['image'] = df['image_name']  # Create column to match with ground truth
     df = pd.merge(df, gt_df, on='image', how='inner')
     
+    # Merge with metadata
+    df = pd.merge(df, metadata_df, on='image', how='left')
+    
+    # Fill missing metadata values
+    metadata_columns = [col for col in df.columns if col.startswith('site_') or col.startswith('sex_') or col == 'age_normalized']
+    for col in metadata_columns:
+        if col == 'age_normalized':
+            df[col] = df[col].fillna(0.5)  # Default to middle age
+        else:
+            df[col] = df[col].fillna(0)  # Default to 0 for one-hot encoded columns
+    
     # Create a diagnosis column based on the one-hot encoded columns
-    # The columns are: MEL, NV, BCC, AK, BKL, DF, VASC, SCC, UNK
     diagnosis_columns = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC', 'UNK']
     
     # Convert to numeric diagnosis index (0-8)
@@ -279,13 +332,13 @@ def load_yolo_detections(
     
     print(f"Created {n_folds} folds with stratification")
     print(f"Final class mapping: {diagnosis_to_idx}")
-    print(f"Final dataset size: {len(df)} samples")
+    print(f"Final dataset size: {len(df)} samples with metadata features")
     
     return df, fold_indices, diagnosis_to_idx
 
 class YOLODetectionGenerator:
     """
-    Custom generator for YOLO detected images with multi-class classification
+    Custom generator for YOLO detected images with multi-class classification and metadata
     """
     def __init__(self, df, diagnosis_to_idx, batch_size=16, is_training=True, 
                  seed=42, memory_efficient=True, augmentation_strength='medium'):
@@ -295,11 +348,17 @@ class YOLODetectionGenerator:
         self.is_training = is_training
         self.memory_efficient = memory_efficient
         self.augmentation_strength = augmentation_strength
+        self.seed = seed
         
         # Extract diagnoses and image paths
         self.diagnoses = df['diagnosis'].values
         self.image_paths = df['image_path'].values
         self.label_paths = df['label_path'].values
+        
+        # Extract metadata features
+        self.metadata_columns = [col for col in df.columns if col.startswith('site_') or col.startswith('sex_') or col == 'age_normalized']
+        self.metadata = df[self.metadata_columns].values
+        self.metadata_dim = len(self.metadata_columns)
         
         # Number of classes is the number of unique diagnoses
         self.num_classes = len(diagnosis_to_idx)
@@ -429,7 +488,7 @@ class YOLODetectionGenerator:
             return np.zeros((224, 224, 3))
     
     def __getitem__(self, idx):
-        """Get a batch of data"""
+        """Get a batch of data with metadata"""
         # Get batch indices
         start_idx = idx * self.batch_size
         end_idx = min((idx + 1) * self.batch_size, self.n_samples)
@@ -438,6 +497,7 @@ class YOLODetectionGenerator:
         # Initialize batch arrays
         batch_size = len(batch_indices)
         batch_images = np.zeros((batch_size, 224, 224, 3), dtype=np.float32)
+        batch_metadata = np.zeros((batch_size, self.metadata_dim), dtype=np.float32)
         batch_labels = np.zeros((batch_size, self.num_classes), dtype=np.float32)
         
         # Fill the batch
@@ -449,6 +509,9 @@ class YOLODetectionGenerator:
             )
             batch_images[i] = img_array
             
+            # Add metadata
+            batch_metadata[i] = self.metadata[idx]
+            
             # Create one-hot encoded label
             diagnosis = self.diagnoses[idx]
             diagnosis_idx = self.diagnosis_to_idx.get(diagnosis, 0)  # Default to 0 if not found
@@ -458,7 +521,8 @@ class YOLODetectionGenerator:
             if self.memory_efficient and i % 10 == 0:
                 gc.collect()
         
-        return batch_images, batch_labels
+        # Return images, metadata, and labels
+        return [batch_images, batch_metadata], batch_labels
 
 
 def create_yolo_generators(

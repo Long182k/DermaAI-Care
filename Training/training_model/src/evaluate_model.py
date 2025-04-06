@@ -13,6 +13,7 @@ from sklearn.metrics import (
     roc_curve,
     auc
 )
+import json
 
 
 # Around line 16-20, keep the function signature
@@ -170,3 +171,35 @@ def save_model(model, save_path):
         print(f"Model successfully saved to {save_path}")
     except Exception as e:
         print(f"Error saving model: {e}")
+
+
+def save_metrics_to_json(metrics, file_path):
+    """
+    Save evaluation metrics to a JSON file
+    
+    Args:
+        metrics: Dictionary of metrics
+        file_path: Path to save the JSON file
+    """
+    # Convert numpy values to Python native types for JSON serialization
+    serializable_metrics = {}
+    for key, value in metrics.items():
+        if key == 'class_report':
+            # Handle the classification report separately
+            serializable_metrics[key] = {
+                class_name: {
+                    metric: float(val) if isinstance(val, (np.float32, np.float64)) else val
+                    for metric, val in class_metrics.items()
+                }
+                for class_name, class_metrics in value.items()
+            }
+        elif isinstance(value, (np.float32, np.float64)):
+            serializable_metrics[key] = float(value)
+        else:
+            serializable_metrics[key] = value
+    
+    # Save to file
+    with open(file_path, 'w') as f:
+        json.dump(serializable_metrics, f, indent=4)
+    
+    print(f"Metrics saved to {file_path}")

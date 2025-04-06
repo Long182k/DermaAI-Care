@@ -841,55 +841,144 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
         print(f"Error in MLflow logging: {e}")
 
 
-def create_ensemble_model(num_classes, num_models=3):
+def create_ensemble_model(model_paths=None, num_classes=9, num_models=3):
     """
-    Create an ensemble of models for better performance on imbalanced data
+    Create an ensemble model from multiple trained models
+    
+    Args:
+        model_paths: List of paths to trained models
+        num_classes: Number of output classes
+        num_models: Number of models to include in ensemble if model_paths not provided
+        
+    Returns:
+        Ensemble model
     """
-    models = []
-    
-    for i in range(num_models):
-        with strategy.scope():
-            # Create base model
-            base_model = InceptionResNetV2(
-                weights='imagenet',
-                include_top=False,
-                input_shape=(224, 224, 3),
-                pooling='avg'
-            )
+    with strategy.scope():
+        # If model paths are provided, load those models
+        if model_paths and len(model_paths) > 0:
+            models = []
+            for path in model_paths:
+                try:
+                    model = tf.keras.models.load_model(path, compile=False)
+                    models.append(model)
+                    print(f"Loaded model from {path}")
+                except Exception as e:
+                    print(f"Error loading model from {path}: {e}")
             
-            # Freeze base model
-            base_model.trainable = False
-            
-            # Build model
-            inputs = Input(shape=(224, 224, 3))
-            x = base_model(inputs, training=False)
-            x = Dense(512, activation='relu')(x)
-            x = Dropout(0.5)(x)
-            outputs = Dense(num_classes, activation='softmax')(x)
-            
-            model = Model(inputs=inputs, outputs=outputs)
-            
-            # Compile with focal loss
-            model.compile(
-                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-                loss=focal_loss(gamma=2.0, alpha=0.25),
-                metrics=['accuracy', tf.keras.metrics.Recall(name='recall')]
-            )
-            
-            models.append(model)
+            if not models:
+                print("No models could be loaded. Creating new models instead.")
+                models = [build_peft_model(num_classes=num_classes) for _ in range(min(3, num_models))]
+        else:
+            # Create new models if no paths provided
+            print("No model paths provided. Creating new models.")
+            models = [build_peft_model(num_classes=num_classes) for _ in range(min(3, num_models))]
+        
+        # Create input layer
+        if isinstance(models[0].input, list):
+            # Handle multi-input models (for metadata)
+            inputs = [tf.keras.layers.Input(shape=inp.shape[1:]) for inp in models[0].input]
+        else:
+            # Single input model
+            inputs = tf.keras.layers.Input(shape=models[0].input.shape[1:])
+        
+        # Get outputs from each model
+        outputs = []
+        for model in models:
+            if isinstance(inputs, list):
+                outputs.append(model(inputs))
+            else:
+                outputs.append(model(inputs))
+        
+        # Average the outputs
+        if len(outputs) > 1:
+            ensemble_output = tf.keras.layers.Average()(outputs)
+        else:
+            ensemble_output = outputs[0]
+        
+        # Create and compile the ensemble model
+        ensemble_model = tf.keras.Model(inputs=inputs, outputs=ensemble_output)
+        
+        ensemble_model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss=focal_loss(gamma=2.0, alpha=0.25),
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc', from_logits=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        )
+        
+        print(f"Created ensemble model with {len(models)} sub-models")
+        return ensemble_model
+
+def build_peft_model_with_metadata(num_classes=9, metadata_dim=0, r=8, alpha=32):
+    """
+    Build and compile the model with PEFT (LoRA) optimizations and metadata integration
+    Adapted for 9-class skin lesion classification with metadata features
     
-    # Create ensemble model
-    ensemble_input = Input(shape=(224, 224, 3))
-    outputs = [model(ensemble_input) for model in models]
-    ensemble_output = tf.keras.layers.Average()(outputs)
+    Args:
+        num_classes: Number of output classes
+        metadata_dim: Dimension of metadata features
+        r: LoRA rank
+        alpha: LoRA scaling factor
+    """
+    # Enable mixed precision for faster training and lower memory usage
+    set_global_policy('mixed_float16')
     
-    ensemble_model = Model(inputs=ensemble_input, outputs=ensemble_output)
-    
-    # Compile ensemble model
-    ensemble_model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-        loss=focal_loss(gamma=2.0, alpha=0.25),
-        metrics=['accuracy', tf.keras.metrics.Recall(name='recall')]
-    )
-    
-    return ensemble_model, models
+    with strategy.scope():
+        # Create the base model with efficient memory usage
+        base_model = InceptionResNetV2(
+            weights='imagenet',
+            include_top=False,
+            input_shape=(224, 224, 3),
+            pooling='avg'
+        )
+        
+        # Freeze the base model
+        base_model.trainable = False
+        
+        # Build the model using Functional API
+        image_input = Input(shape=(224, 224, 3), name='image_input')
+        metadata_input = Input(shape=(metadata_dim,), name='metadata_input')
+        
+        # Process image through base model
+        x = base_model(image_input, training=False)
+        
+        # Combine image features with metadata
+        if metadata_dim > 0:
+            # Process metadata through dense layers
+            metadata_features = Dense(32, activation='relu')(metadata_input)
+            metadata_features = Dropout(0.2)(metadata_features)
+            
+            # Concatenate image features and metadata features
+            x = Concatenate()([x, metadata_features])
+        
+        # Apply LoRA to the final dense layer
+        dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
+        dense_output = dense_layer(x)
+        
+        # Add dropout for regularization
+        x = Dropout(0.5)(dense_output)
+        
+        # Final classification layer with 9 outputs
+        # MEL, NV, BCC, AK, BKL, DF, VASC, SCC, UNK
+        outputs = Dense(num_classes, activation='softmax', name='predictions')(x)
+        
+        # Create model with multiple inputs
+        model = Model(inputs=[image_input, metadata_input] if metadata_dim > 0 else image_input, 
+                     outputs=outputs)
+        
+        # Compile with focal loss to address class imbalance
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss=focal_loss(gamma=2.0, alpha=0.25),
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(name='auc', from_logits=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        )
+        
+        return model

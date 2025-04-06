@@ -72,21 +72,22 @@ def main():
                         help='Strength of data augmentation')
     parser.add_argument('--use_metadata', action='store_true',
                         help='Whether to use patient metadata (age, sex, anatomical site)')
-    parser.add_argument('--model_save_path', type=str, default=MODEL_SAVE_PATH,
+    parser.add_argument('--model_save_path', type=str, default=None,
                         help='Path to save the trained model')
     
     args = parser.parse_args()
-    
-    # Update MODEL_SAVE_PATH if provided
-    global MODEL_SAVE_PATH
-    if args.model_save_path:
-        MODEL_SAVE_PATH = args.model_save_path
     
     # Set random seeds for reproducibility
     set_random_seeds(args.seed)
     
     # Configure GPU memory settings
     strategy = setup_gpu(memory_limit=args.memory_limit)
+    
+    # Update model save path if provided
+    model_save_path = MODEL_SAVE_PATH
+    if args.model_save_path:
+        model_save_path = args.model_save_path
+        print(f"Custom model save path set: {model_save_path}")
     
     # Analyze dataset to get class weights and statistics
     print("Analyzing dataset...")
@@ -170,8 +171,8 @@ def main():
     model.save(model_path)
     print(f"Model saved to {model_path}")
     
-    model.save(MODEL_SAVE_PATH)
-    print(f"Model also saved to {MODEL_SAVE_PATH}")
+    model.save(model_save_path)
+    print(f"Model also saved to {model_save_path}")
     
     if args.fine_tune:
         fine_tuned_model_path = f"models/fine_tuned_model_fold_{args.fold_idx}.keras"

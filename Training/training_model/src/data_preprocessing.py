@@ -420,13 +420,19 @@ def create_yolo_generators(
     return train_generator, val_generator, diagnosis_to_idx, len(diagnosis_to_idx), n_folds, class_weights
 
 
-def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
+def analyze_yolo_dataset(csv_path, image_dir, labels_dir, metadata_csv_path=None):
     """
     Analyze the dataset and compute class weights and other statistics for multi-label classification
+    
+    Args:
+        csv_path: Path to CSV file with ground truth labels
+        image_dir: Directory containing image files
+        labels_dir: Directory containing YOLO label files
+        metadata_csv_path: Path to CSV file with metadata (optional)
     """
     # Load the data
     df_processed, diagnosis_to_idx = load_yolo_detections(
-        image_dir, labels_dir, csv_path, min_samples_per_class=0
+        image_dir, labels_dir, csv_path, min_samples_per_class=0, metadata_csv_path=metadata_csv_path
     )
     
     # Convert targets to numpy array for analysis
@@ -472,6 +478,15 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
             'samples_with_multiple_labels': int(np.sum(np.sum(targets, axis=1) > 1))
         }
     }
+    
+    # Check for metadata
+    has_metadata = 'metadata' in df_processed.columns and len(df_processed) > 0 and df_processed.iloc[0].get('metadata')
+    if has_metadata:
+        stats['has_metadata'] = True
+        print("\nMetadata is available and will be used for analysis")
+    else:
+        stats['has_metadata'] = False
+        print("\nNo metadata available or provided")
     
     # Print analysis
     print("\nDataset Analysis:")

@@ -82,9 +82,9 @@ class YOLODetectionGenerator(tf.keras.utils.Sequence):
         self.indices = np.arange(len(self.df))
         self.image_shape = (224, 224, 3)
         
-        # Pre-compute image paths to avoid memory leaks
+        # Pre-compute image paths and targets to avoid memory leaks
         self.image_paths = self.df["image_path"].values
-        self.diagnoses = self.df["diagnosis"].values
+        self.targets = np.array(self.df["target"].tolist())  # Convert list of lists to numpy array
         self.bboxes = self.df["bbox"].values
 
         # Add class indices mapping
@@ -122,15 +122,12 @@ class YOLODetectionGenerator(tf.keras.utils.Sequence):
 
         # If we don't have enough samples, repeat some to fill the batch
         if len(batch_indices) < self.batch_size:
-            # Use deterministic random choice with seed
-            rng = np.random.RandomState(
-                self.seed + idx
-            )  # Different seed for each batch but deterministic
+            rng = np.random.RandomState(self.seed + idx)
             extra_needed = self.batch_size - len(batch_indices)
             extra_indices = rng.choice(batch_indices, size=extra_needed, replace=True)
             batch_indices = np.concatenate([batch_indices, extra_indices])
 
-        # Now we're guaranteed to have exactly batch_size samples
+        # Initialize batch arrays
         batch_x = np.zeros((self.batch_size, 224, 224, 3), dtype=np.float32)
         batch_y = np.zeros((self.batch_size, self.n_classes), dtype=np.float32)
 
@@ -168,41 +165,23 @@ class YOLODetectionGenerator(tf.keras.utils.Sequence):
                     # Apply GPU-friendly augmentations
                     img_array = self.augmentation(np.expand_dims(img_array, axis=0))[0]
 
-                    # Apply contrast using NumPy instead of TensorFlow
-                    item_seed = (
-                        self.seed + idx + i
-                    )  # Unique but deterministic seed for each item
-                    if item_seed % 2 == 0:  # Apply to ~50% of images
-                        # Set the random seed for NumPy
-                        np.random.seed(item_seed)
-
-                        # Apply contrast adjustment using NumPy (CPU operation)
-                        contrast_factor = np.random.uniform(0.8, 1.2)
-                        mean = np.mean(img_array, axis=(0, 1), keepdims=True)
-                        img_array = (img_array - mean) * contrast_factor + mean
-                        img_array = np.clip(img_array, 0, 255)
-
                 # Apply preprocessing
                 img_array = preprocess_input(img_array)
 
                 batch_x[i] = img_array
-                batch_y[i] = tf.keras.utils.to_categorical(
-                    self.diagnosis_to_idx[self.diagnoses[idx]], self.n_classes
-                )
+                batch_y[i] = self.targets[idx]  # Use pre-computed targets
 
                 # Memory optimization: explicitly delete arrays
                 if self.memory_efficient:
                     del img_array
-                    # Force garbage collection periodically
                     if i % 8 == 0:
                         gc.collect()
             except Exception as e:
                 print(f"Error processing image {self.image_paths[idx]}: {e}")
-                # Use a blank image if there's an error
-                batch_x[i] = np.zeros((224, 224, 3), dtype=np.float32)
-                batch_y[i] = tf.keras.utils.to_categorical(
-                    self.diagnosis_to_idx[self.diagnoses[idx]], self.n_classes
-                )
+                # Use the previous successful sample in case of error
+                if i > 0:
+                    batch_x[i] = batch_x[i-1]
+                    batch_y[i] = batch_y[i-1]
 
         return batch_x, batch_y
 
@@ -211,81 +190,73 @@ def load_yolo_detections(
     image_dir, labels_dir, csv_path, min_samples_per_class=5, n_folds=5
 ):
     """
-    Load YOLO detected images and create cross-validation folds
+    Load image data and YOLO format detections, combining with metadata from CSV
     """
-    # Read the CSV file for diagnosis information
-    df = pd.read_csv(csv_path)
-
-    # Get all JPG images from the detection directory
-    image_files = glob.glob(os.path.join(image_dir, "*.jpg"))
-
-    # Create a new dataframe for detected images
-    detected_data = []
-
-    for img_path in image_files:
-        # Extract image name from path
-        img_name = os.path.basename(img_path).split(".")[0]
-
-        # Find corresponding label file
-        label_path = os.path.join(labels_dir, f"{img_name}.txt")
-
-        # Skip if label file doesn't exist
-        if not os.path.exists(label_path):
+    # Load CSV files
+    df_labels = pd.read_csv(csv_path)
+    metadata_path = os.path.join(os.path.dirname(csv_path), 'ISIC_2019_Training_Metadata.csv')
+    df_metadata = pd.read_csv(metadata_path)
+    
+    # Define the target classes
+    target_columns = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC', 'UNK']
+    
+    # Create diagnosis mapping
+    diagnosis_to_idx = {label: idx for idx, label in enumerate(target_columns)}
+    
+    # Merge metadata with labels
+    df = df_labels.merge(df_metadata, on='image', how='left')
+    
+    # Process each image and its corresponding YOLO label
+    image_data = []
+    for idx, row in df.iterrows():
+        image_name = row['image']
+        image_path = os.path.join(image_dir, 'crops', f"{image_name}.jpg")
+        label_path = os.path.join(labels_dir, f"{image_name}.txt")
+        
+        # Skip if image doesn't exist
+        if not os.path.exists(image_path):
             continue
-
-        # Find the original image entry in the CSV
-        original_entry = df[df["image_name"] == img_name]
-
-        # Skip if no matching entry in CSV
-        if len(original_entry) == 0:
-            continue
-
-        # Read the label file to get bounding box
-        with open(label_path, "r") as f:
-            label_content = f.read().strip().split()
-
-        # Parse label content (class x_center y_center width height confidence)
-        if len(label_content) >= 5:  # Ensure we have at least the basic bbox info
-            # Extract bounding box coordinates
-            bbox = [
-                float(label_content[1]),
-                float(label_content[2]),
-                float(label_content[3]),
-                float(label_content[4]),
-            ]
-
-            # Add to detected data
-            detected_data.append(
-                {
-                    "image_name": img_name,
-                    "image_path": img_path,
-                    "diagnosis": original_entry["diagnosis"].values[0],
-                    "benign_malignant": original_entry["benign_malignant"].values[0],
-                    "target": original_entry["target"].values[0],
-                    "bbox": bbox,
-                }
-            )
-
-    # Create dataframe from detected data
-    detected_df = pd.DataFrame(detected_data)
-
-    # Filter out classes with too few samples
-    class_counts = detected_df["diagnosis"].value_counts()
-    valid_classes = class_counts[class_counts >= min_samples_per_class].index
-    filtered_df = detected_df[detected_df["diagnosis"].isin(valid_classes)]
-
-    # Create diagnosis to index mapping
-    unique_diagnoses = filtered_df["diagnosis"].unique()
-    diagnosis_to_idx = {diagnosis: i for i, diagnosis in enumerate(unique_diagnoses)}
-
-    # Create stratified k-fold indices
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-    fold_indices = []
-
-    for train_idx, val_idx in skf.split(filtered_df, filtered_df["diagnosis"]):
-        fold_indices.append({"train_idx": train_idx, "val_idx": val_idx})
-
-    return filtered_df, fold_indices, diagnosis_to_idx
+            
+        # Get YOLO format bounding box
+        if os.path.exists(label_path):
+            with open(label_path, 'r') as f:
+                bbox_line = f.readline().strip()
+                if bbox_line:
+                    _, x_center, y_center, width, height = map(float, bbox_line.split())
+                    bbox = [x_center, y_center, width, height]
+                else:
+                    bbox = [0.5, 0.5, 1.0, 1.0]  # Default to full image
+        else:
+            bbox = [0.5, 0.5, 1.0, 1.0]  # Default to full image
+            
+        # Get the diagnosis (multi-label)
+        target = [row[col] for col in target_columns]
+        
+        # Get metadata
+        metadata = {
+            'age_approx': row.get('age_approx', None),
+            'anatom_site_general': row.get('anatom_site_general', None),
+            'sex': row.get('sex', None)
+        }
+        
+        image_data.append({
+            'image_path': image_path,
+            'bbox': bbox,
+            'target': target,
+            'metadata': metadata
+        })
+    
+    # Convert to DataFrame
+    df_processed = pd.DataFrame(image_data)
+    
+    # Filter out classes with too few samples if needed
+    if min_samples_per_class > 0:
+        # Count samples per class
+        class_counts = np.sum([df_processed['target'].apply(lambda x: x[i]) for i in range(len(target_columns))], axis=1)
+        valid_samples = class_counts >= min_samples_per_class
+        df_processed = df_processed[valid_samples]
+    
+    return df_processed, diagnosis_to_idx
 
 
 def create_yolo_generators(
@@ -300,155 +271,120 @@ def create_yolo_generators(
     augmentation_strength='medium'
 ):
     """
-    Create train and validation generators for a specific fold using YOLO detected images
-    Uses 4 folds for training (with augmentation) and 1 fold for testing (no modification)
+    Create data generators for training and validation using YOLO format detections
     """
-    df, fold_indices, diagnosis_to_idx = load_yolo_detections(
-        image_dir,
-        labels_dir,
-        csv_path,
-        min_samples_per_class=min_samples_per_class,
-        n_folds=n_folds,
+    # Load and preprocess the data
+    df_processed, diagnosis_to_idx = load_yolo_detections(
+        image_dir, labels_dir, csv_path, min_samples_per_class, n_folds
     )
-
-    # Get indices for all folds
-    all_train_indices = []
-    test_indices = None
     
-    # Combine 4 folds for training, use 1 fold for testing
-    for i, fold_data in enumerate(fold_indices):
-        if i == fold_idx:
-            # This is the test fold
-            test_indices = fold_data["val_idx"]
-        else:
-            # Add to training folds
-            all_train_indices.extend(fold_data["train_idx"])
+    # Create stratified k-fold split based on the dominant class for each sample
+    dominant_classes = df_processed['target'].apply(lambda x: np.argmax(x))
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    fold_indices = list(skf.split(df_processed, dominant_classes))
     
-    # Create train and test dataframes
-    train_df = df.iloc[all_train_indices]
-    test_df = df.iloc[test_indices]
+    # Get train and validation indices for the current fold
+    train_idx, val_idx = fold_indices[fold_idx]
     
-    print(f"Training on {len(train_df)} samples from 4 folds")
-    print(f"Testing on {len(test_df)} samples from fold {fold_idx}")
-
-    # Create generators - apply augmentation only to training data
+    # Split the data into training and validation sets
+    train_df = df_processed.iloc[train_idx].reset_index(drop=True)
+    val_df = df_processed.iloc[val_idx].reset_index(drop=True)
+    
+    # Calculate class weights for training
+    train_targets = np.array(train_df['target'].tolist())
+    class_weights = {}
+    for i in range(len(diagnosis_to_idx)):
+        # Calculate weight for each class based on positive vs negative samples
+        pos_weight = np.sum(train_targets[:, i] == 0) / np.sum(train_targets[:, i] == 1)
+        class_weights[i] = pos_weight
+    
+    # Create data generators
     train_generator = YOLODetectionGenerator(
         train_df,
         diagnosis_to_idx,
         batch_size=batch_size,
-        is_training=True,  # Apply augmentation
+        is_training=True,
         seed=seed,
-        memory_efficient=True,
-        augmentation_strength=augmentation_strength  # Pass augmentation strength
+        augmentation_strength=augmentation_strength
     )
-
-    test_generator = YOLODetectionGenerator(
-        test_df,
+    
+    val_generator = YOLODetectionGenerator(
+        val_df,
         diagnosis_to_idx,
         batch_size=batch_size,
-        is_training=False,  # No augmentation for test data
-        seed=seed + 1,
-        memory_efficient=True
+        is_training=False,
+        seed=seed
     )
-
-    # Access class indices before converting to dataset
-    train_class_indices = train_generator.class_indices
-
-    n_classes = len(diagnosis_to_idx)
-
-    return (
-        train_generator,
-        test_generator,
-        diagnosis_to_idx,
-        n_classes,
-        len(fold_indices),
-        train_class_indices,
-    )
+    
+    return train_generator, val_generator, diagnosis_to_idx, len(diagnosis_to_idx), n_folds, class_weights
 
 
 def analyze_yolo_dataset(csv_path, image_dir, labels_dir):
     """
-    Analyze dataset statistics for YOLO detected images
+    Analyze the dataset and compute class weights and other statistics
     """
-    # Read the CSV file for diagnosis information
-    df = pd.read_csv(csv_path)
-
-    # Get all PNG images from the detection directory
-    image_files = glob.glob(os.path.join(image_dir, "*.jpg"))
-
-    # Create a new dataframe for detected images
-    detected_data = []
-
-    for img_path in image_files:
-        # Extract image name from path
-        img_name = os.path.basename(img_path).split(".")[0]
-
-        # Find corresponding label file
-        label_path = os.path.join(labels_dir, f"{img_name}.txt")
-
-        # Skip if label file doesn't exist
-        if not os.path.exists(label_path):
-            continue
-
-        # Find the original image entry in the CSV
-        original_entry = df[df["image_name"] == img_name]
-
-        # Skip if no matching entry in CSV
-        if len(original_entry) == 0:
-            continue
-
-        # Read the label file to get bounding box
-        with open(label_path, "r") as f:
-            label_content = f.read().strip().split()
-
-        # Parse label content (class x_center y_center width height confidence)
-        if len(label_content) >= 5:  # Ensure we have at least the basic bbox info
-            # Add to detected data
-            detected_data.append(
-                {
-                    "image_name": img_name,
-                    "diagnosis": original_entry["diagnosis"].values[0],
-                    "benign_malignant": original_entry["benign_malignant"].values[0],
-                    "target": original_entry["target"].values[0],
-                }
-            )
-
-    # Create dataframe from detected data
-    detected_df = pd.DataFrame(detected_data)
-
-    print("Dataset Statistics:")
-    print("-" * 50)
-    print(f"Total number of detected images: {len(detected_df)}")
-    print("\nDiagnosis distribution:")
-    diagnosis_counts = detected_df["diagnosis"].value_counts()
-    print(diagnosis_counts)
-
-    print("\nClasses with less than 2 samples:")
-    print(diagnosis_counts[diagnosis_counts < 2])
-
-    print("\nBenign/Malignant distribution:")
-    print(detected_df["benign_malignant"].value_counts())
-
-    # Calculate class weights for imbalanced data (only for classes with enough samples)
-    valid_classes = diagnosis_counts[diagnosis_counts >= 2].index
-    valid_df = detected_df[detected_df["diagnosis"].isin(valid_classes)]
-
-    class_weights = compute_class_weight(
-        "balanced", classes=np.unique(valid_df["diagnosis"]), y=valid_df["diagnosis"]
+    # Load the data
+    df_processed, diagnosis_to_idx = load_yolo_detections(
+        image_dir, labels_dir, csv_path, min_samples_per_class=0
     )
-
-    print("class_weights data_preprocessing", class_weights)
-    print(
-        "dict(zip(np.unique(valid_df['diagnosis']), class_weights))",
-        dict(zip(np.unique(valid_df["diagnosis"]), class_weights)),
-    )
-
-    return {
-        "class_weights": dict(zip(np.unique(valid_df["diagnosis"]), class_weights)),
-        "n_classes": len(valid_classes),
-        "dataset_size": len(detected_df),  # Total number of images
-        "valid_dataset_size": len(valid_df),  # Number of images in valid classes
+    
+    # Convert targets to numpy array for analysis
+    targets = np.array(df_processed['target'].tolist())
+    
+    # Calculate class distribution
+    class_distribution = np.sum(targets, axis=0)
+    total_samples = len(df_processed)
+    
+    # Calculate class weights using balanced approach
+    class_weights = {}
+    for i in range(len(diagnosis_to_idx)):
+        n_pos = np.sum(targets[:, i])
+        n_neg = total_samples - n_pos
+        # Handle case where a class might have no positive samples
+        if n_pos > 0:
+            pos_weight = n_neg / n_pos
+        else:
+            pos_weight = 1.0
+        class_weights[i] = pos_weight
+    
+    # Calculate co-occurrence matrix
+    co_occurrence = np.zeros((len(diagnosis_to_idx), len(diagnosis_to_idx)))
+    for target in targets:
+        for i in range(len(diagnosis_to_idx)):
+            for j in range(len(diagnosis_to_idx)):
+                if target[i] == 1 and target[j] == 1:
+                    co_occurrence[i, j] += 1
+    
+    # Calculate statistics
+    stats = {
+        'total_samples': total_samples,
+        'class_distribution': {
+            label: int(class_distribution[i])
+            for label, i in diagnosis_to_idx.items()
+        },
+        'class_weights': class_weights,
+        'co_occurrence_matrix': co_occurrence.tolist(),
+        'class_mapping': diagnosis_to_idx,
+        'multi_label_stats': {
+            'avg_labels_per_sample': np.mean(np.sum(targets, axis=1)),
+            'max_labels_per_sample': int(np.max(np.sum(targets, axis=1))),
+            'samples_with_multiple_labels': int(np.sum(np.sum(targets, axis=1) > 1))
+        }
     }
+    
+    # Print analysis
+    print("\nDataset Analysis:")
+    print(f"Total number of samples: {total_samples}")
+    print("\nClass distribution:")
+    for label, count in stats['class_distribution'].items():
+        print(f"{label}: {count} samples ({count/total_samples*100:.2f}%)")
+    
+    print("\nMulti-label statistics:")
+    print(f"Average labels per sample: {stats['multi_label_stats']['avg_labels_per_sample']:.2f}")
+    print(f"Maximum labels per sample: {stats['multi_label_stats']['max_labels_per_sample']}")
+    print(f"Samples with multiple labels: {stats['multi_label_stats']['samples_with_multiple_labels']} ({stats['multi_label_stats']['samples_with_multiple_labels']/total_samples*100:.2f}%)")
+    
+    return stats
 
 
 # Usage example:

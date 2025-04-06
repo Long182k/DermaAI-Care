@@ -245,7 +245,6 @@ class MemoryCleanupCallback(Callback):
 # In the train_model function, modify the class weights handling:
 
 # Modify the train_model function to better handle class imbalance
-
 def train_model(model, train_data, val_data, epochs, early_stopping_patience, reduce_lr_patience, 
                 class_weights, train_class_indices, use_datasets=False, 
                 class_weight_multiplier=3.0, use_focal_loss=True, learning_rate=0.0001):
@@ -362,10 +361,55 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
                 verbose=1
             )
         else:
-            # For Keras data generators
-            print("Using Keras data generators for training")
+            # For Keras data generators and custom generators
+            print("Using data generators for training")
+            
+            # Check if we're dealing with a YOLODetectionGenerator
+            if hasattr(train_data, '__class__') and 'YOLODetectionGenerator' in train_data.__class__.__name__:
+                print("Detected YOLODetectionGenerator. Converting to tf.data.Dataset")
+                
+                # Create a function to yield batches from the generator
+                def generator_fn():
+                    for i in range(len(train_data)):
+                        yield train_data[i]
+                
+                # Create a function to yield batches from validation generator
+                def val_generator_fn():
+                    for i in range(len(val_data)):
+                        yield val_data[i]
+                
+                # Determine output shapes and types from a sample batch
+                x_batch, y_batch = train_data[0]
+                
+                # Create tf.data.Dataset from the generator
+                train_dataset = tf.data.Dataset.from_generator(
+                    generator_fn,
+                    output_signature=(
+                        tf.TensorSpec(shape=(None,) + x_batch.shape[1:], dtype=tf.float32),
+                        tf.TensorSpec(shape=(None,) + y_batch.shape[1:], dtype=tf.float32)
+                    )
+                ).prefetch(tf.data.AUTOTUNE)
+                
+                # Create validation dataset
+                val_dataset = tf.data.Dataset.from_generator(
+                    val_generator_fn,
+                    output_signature=(
+                        tf.TensorSpec(shape=(None,) + x_batch.shape[1:], dtype=tf.float32),
+                        tf.TensorSpec(shape=(None,) + y_batch.shape[1:], dtype=tf.float32)
+                    )
+                ).prefetch(tf.data.AUTOTUNE)
+                
+                # Train with the datasets
+                history = model.fit(
+                    train_dataset,
+                    validation_data=val_dataset,
+                    epochs=epochs,
+                    callbacks=callbacks,
+                    class_weight=class_weights if not use_focal_loss else None,
+                    verbose=1
+                )
             # Check if we need to create a balanced generator
-            if hasattr(train_data, 'class_counts') and sum(train_data.class_counts.values()) > 0:
+            elif hasattr(train_data, 'class_counts') and sum(train_data.class_counts.values()) > 0:
                 print("Creating balanced data generator for training")
                 balanced_train_data = create_balanced_data_generator(train_data)
                 
@@ -400,7 +444,6 @@ def train_model(model, train_data, val_data, epochs, early_stopping_patience, re
         gc.collect()
         
         return None
-
 
 def fine_tune_model(model, train_generator, val_generator, epochs, early_stopping_patience, learning_rate=1e-5):
     """
@@ -891,9 +934,17 @@ def setup_gpu(memory_limit=None, allow_growth=True):
         strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
         return strategy
 
-def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
+def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices, metadata_used=False):
     """
     Log model and metrics to MLflow with proper signature and input example
+    
+    Args:
+        model: The model to log
+        history: Training history
+        model_name: Name of the model
+        fold_idx: Fold index for cross-validation
+        class_indices: Dictionary mapping class names to indices
+        metadata_used: Whether metadata was used in the model
     """
     try:
         # Set experiment
@@ -906,6 +957,7 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
             mlflow.log_param("fold_idx", fold_idx)
             mlflow.log_param("num_classes", len(class_indices))
             mlflow.log_param("class_mapping", class_indices)
+            mlflow.log_param("metadata_used", metadata_used)  # Log whether metadata was used
             
             # Log metrics
             for metric in ['accuracy', 'val_accuracy', 'loss', 'val_loss', 'auc', 'val_auc']:
@@ -928,10 +980,20 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
                 model.save(model_path)
                 
                 # Create an input example (dummy input with correct shape)
-                input_example = np.zeros((1, 224, 224, 3), dtype=np.float32)
-                
-                # Create model signature
-                signature = infer_signature(input_example, model.predict(input_example))
+                if metadata_used and isinstance(model.input, list):
+                    # For models with metadata, create appropriate input examples
+                    image_input = np.zeros((1, 224, 224, 3), dtype=np.float32)
+                    metadata_dim = model.input[1].shape[1]
+                    metadata_input = np.zeros((1, metadata_dim), dtype=np.float32)
+                    input_example = [image_input, metadata_input]
+                    
+                    # Create model signature with the correct input format
+                    output = model.predict(input_example)
+                    signature = infer_signature(input_example, output)
+                else:
+                    # For standard image-only models
+                    input_example = np.zeros((1, 224, 224, 3), dtype=np.float32)
+                    signature = infer_signature(input_example, model.predict(input_example))
                 
                 # Log the model to MLflow with signature and input example
                 mlflow.tensorflow.log_model(
@@ -950,7 +1012,6 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
     
     except Exception as e:
         print(f"Error in MLflow logging: {e}")
-
 
 def create_ensemble_model(model_paths=None, num_classes=9, num_models=3):
     """

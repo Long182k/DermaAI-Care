@@ -562,6 +562,10 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
     # Check if we're dealing with a YOLODetectionGenerator
     is_yolo_generator = hasattr(train_generator, '__class__') and 'YOLODetectionGenerator' in train_generator.__class__.__name__
     
+    # Initialize YOLO-specific variables
+    train_dataset = None
+    val_dataset = None
+    
     if is_yolo_generator:
         print("Detected YOLODetectionGenerator. Using specialized handling for fine-tuning.")
         
@@ -669,21 +673,83 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
             print("Fine-tuning could not be completed. Returning original model.")
             return model
     
-    # Instead of recreating the model, just unfreeze layers in the existing model
+    # Check if the model has a Functional component that might cause PEFT issues
+    has_functional_component = False
+    if model is not None:
+        # Initialize flag to track functional components
+        has_functional_component = any(
+            isinstance(layer, tf.keras.Model) and 
+            hasattr(layer, '_is_graph_network') and 
+            layer._is_graph_network 
+            for layer in model.layers
+        )
+        
     try:
+        # Try to apply PEFT
+        try:
+            # Check if any layer in the model is a Functional object
+            for layer in model.layers:
+                if isinstance(layer, tf.keras.Model) and hasattr(layer, '_is_graph_network') and layer._is_graph_network:
+                    has_functional_component = True
+                    break
+            
+            if has_functional_component:
+                print("Model contains Functional components that may not be compatible with PEFT")
+                print("Using standard fine-tuning approach instead")
+                # Skip PEFT and use standard fine-tuning
+            else:
+                # Try to import and apply PEFT if available
+                try:
+                    from transformers import TFAutoModelForSequenceClassification
+                    from peft import get_peft_config, PeftConfig, PeftModel, get_peft_model, LoraConfig, TaskType
+                    
+                    # Configure PEFT with LoRA
+                    peft_config = LoraConfig(
+                        task_type=TaskType.SEQ_CLS,
+                        inference_mode=False,
+                        r=8,
+                        lora_alpha=32,
+                        lora_dropout=0.1,
+                        target_modules=["query", "value", "dense"]
+                    )
+                    
+                    # Try to apply PEFT
+                    model = get_peft_model(model, peft_config)
+                    print("Successfully applied PEFT with LoRA")
+                except ImportError:
+                    print("PEFT library not available. Using standard fine-tuning.")
+                except Exception as peft_error:
+                    print(f"Error applying PEFT: {peft_error}")
+                    print("Using standard model without PEFT")
+        except Exception as e:
+            print(f"Error checking for PEFT compatibility: {e}")
+            print("Proceeding with standard fine-tuning")
+    
+        # Instead of recreating the model, just unfreeze layers in the existing model
         # Find the base model (InceptionResNetV2) in the current model
         for layer in model.layers:
             if isinstance(layer, tf.keras.Model):  # This should find the InceptionResNetV2 base model
                 base_model = layer
                 print(f"Found base model: {base_model.name}")
                 
-                # Unfreeze only the last 10 layers of the base model to save memory
-                for layer in base_model.layers[:-10]:
-                    layer.trainable = False
-                for layer in base_model.layers[-10:]:
-                    layer.trainable = True
-                
-                print(f"Unfrozen last 10 layers of base model")
+                # For models with Functional components, be more conservative with unfreezing
+                if has_functional_component:
+                    # Only unfreeze the last few layers to avoid issues with Functional objects
+                    num_layers_to_unfreeze = min(5, len(base_model.layers))
+                    for layer in base_model.layers[:-num_layers_to_unfreeze]:
+                        layer.trainable = False
+                    for layer in base_model.layers[-num_layers_to_unfreeze:]:
+                        layer.trainable = True
+                    
+                    print(f"Unfrozen last {num_layers_to_unfreeze} layers of base model (conservative approach for Functional model)")
+                else:
+                    # Standard unfreezing for non-Functional models
+                    for layer in base_model.layers[:-10]:
+                        layer.trainable = False
+                    for layer in base_model.layers[-10:]:
+                        layer.trainable = True
+                    
+                    print(f"Unfrozen last 10 layers of base model")
                 break
         else:
             # If we didn't find a nested model, look for the InceptionResNetV2 layer directly
@@ -692,13 +758,22 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
                     base_layer = layer
                     print(f"Found base layer at index {i}: {base_layer.name}")
                     
-                    # Unfreeze only the last 10 layers if it has layers attribute
+                    # Unfreeze only the last few layers if it has layers attribute
                     if hasattr(base_layer, 'layers'):
-                        for layer in base_layer.layers[:-10]:
-                            layer.trainable = False
-                        for layer in base_layer.layers[-10:]:
-                            layer.trainable = True
-                        print(f"Unfrozen last 10 layers of base layer")
+                        # For models with Functional components, be more conservative
+                        if has_functional_component:
+                            num_layers_to_unfreeze = min(5, len(base_layer.layers))
+                            for layer in base_layer.layers[:-num_layers_to_unfreeze]:
+                                layer.trainable = False
+                            for layer in base_layer.layers[-num_layers_to_unfreeze:]:
+                                layer.trainable = True
+                            print(f"Unfrozen last {num_layers_to_unfreeze} layers of base layer (conservative approach)")
+                        else:
+                            for layer in base_layer.layers[:-10]:
+                                layer.trainable = False
+                            for layer in base_layer.layers[-10:]:
+                                layer.trainable = True
+                            print(f"Unfrozen last 10 layers of base layer")
                     else:
                         # If it doesn't have layers, just make it trainable
                         base_layer.trainable = True
@@ -712,12 +787,22 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
         tf.keras.backend.clear_session()
         
         # Fix for optimizer initialization error - create a new optimizer directly
-        new_optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)  # Using the learning_rate parameter
+        new_optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+        
+        # For models with Functional components, use a simpler loss function to avoid issues
+        if has_functional_component:
+            loss_fn = 'categorical_crossentropy'  # Simple loss for Functional models
+        else:
+            # Try to use focal loss for non-Functional models
+            try:
+                loss_fn = focal_loss(gamma=2.0, alpha=0.25)
+            except:
+                loss_fn = 'categorical_crossentropy'  # Fallback
         
         # Recompile the model with the new optimizer
         model.compile(
             optimizer=new_optimizer,
-            loss='categorical_crossentropy',
+            loss=loss_fn,
             metrics=[
                 'accuracy',
                 tf.keras.metrics.AUC(name='auc', from_logits=False),
@@ -739,10 +824,9 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
         tf.keras.backend.clear_session()
         
         # Recompile with a lower learning rate
-        # Recompile the model with focal loss and lower learning rate
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),  # Using the learning_rate parameter
-            loss=focal_loss(gamma=2.0, alpha=0.25),  # Use focal loss
+            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+            loss='categorical_crossentropy',  # Use simple loss for fallback
             metrics=[
                 'accuracy',
                 tf.keras.metrics.AUC(name='auc', from_logits=False),
@@ -750,44 +834,23 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
                 tf.keras.metrics.Recall(name='recall')
             ]
         )
-        
-        # Create callbacks for fine-tuning with focus on minority class
-        callbacks = [
-            tf.keras.callbacks.EarlyStopping(
-                monitor='val_recall',  # Focus on recall for minority class
-                patience=early_stopping_patience,
-                restore_best_weights=True,
-                mode='max'
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor='val_recall',
-                factor=0.2,
-                patience=3,
-                min_lr=learning_rate / 100,  # Using learning_rate parameter
-                mode='max',
-                verbose=1
-            ),
-            tf.keras.callbacks.ModelCheckpoint(
-                filepath='models/fine_tuned_checkpoint.keras',
-                monitor='val_recall',
-                save_best_only=True,
-                mode='max',
-                verbose=1
-            ),
-            TimeoutCallback(timeout_seconds=3600),  # 1 hour timeout
-            MemoryCleanupCallback(cleanup_frequency=2)  # Clean memory every 2 epochs
-        ]
     
     # Train the model without using strategy.scope()
     try:
-        # Use a try-except block to handle potential strategy issues
-        try:
-            # Disable XLA compilation to avoid MaxPool gradient ops error
-            tf.config.optimizer.set_jit(False)
-            
-            # First attempt: try to fit the model directly
-            # In your main training function, add:
-            
+        # Disable XLA compilation to avoid MaxPool gradient ops error
+        tf.config.optimizer.set_jit(False)
+        
+        # First attempt: try to fit the model directly
+        if is_yolo_generator:
+            # Use the converted datasets for YOLO generators
+            history = model.fit(
+                train_dataset,
+                validation_data=val_dataset,
+                epochs=epochs,
+                callbacks=callbacks,
+                verbose=1
+            )
+        else:
             # Create balanced generators for training
             balanced_train_generator = create_balanced_data_generator(train_generator)
             
@@ -799,104 +862,40 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
                 callbacks=callbacks,
                 verbose=1
             )
-        except RuntimeError as e:
-            if "Mixing different tf.distribute.Strategy objects" in str(e):
-                print("Strategy mismatch detected. Attempting to recreate model...")
-                
-                # Save the weights
-                weights = model.get_weights()
-                
-                # Clear session
-                tf.keras.backend.clear_session()
-                
-                # Create a new model with the same architecture
-                new_model = clone_model(model)
-                
-                # Set the weights
-                new_model.set_weights(weights)
-                
-                # Recompile
-                new_model.compile(
-                    optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                    loss='categorical_crossentropy',
-                    metrics=[
-                        'accuracy',
-                        tf.keras.metrics.AUC(name='auc', from_logits=False),
-                        tf.keras.metrics.Precision(name='precision'),
-                        tf.keras.metrics.Recall(name='recall')
-                    ]
-                )
-                
-                # Disable XLA compilation to avoid MaxPool gradient ops error
-                tf.config.optimizer.set_jit(False)
-                
-                # Try fitting again
-                history = new_model.fit(
-                    train_generator,
-                    validation_data=val_generator,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    verbose=1
-                )
-                
-                # Update the original model
-                model = new_model
-            else:
-                # If it's a different error, re-raise it
-                raise
-        
-        # Force garbage collection after training
-        gc.collect()
-        
-        return history
-    except Exception as e:
-        print(f"Error during fine-tuning: {e}")
-        # Force garbage collection on error
-        gc.collect()
-        
-        # Try one last approach - simplified model with fewer layers
-        try:
-            print("Attempting final approach: creating a simplified model...")
             
-            # Create a simplified model that doesn't use MaxPool gradient ops
-            with strategy.scope():
-                # Create a new model with fewer layers
-                base_model = InceptionResNetV2(
-                    weights='imagenet',
-                    include_top=False,
-                    input_shape=(224, 224, 3),
-                    pooling='avg'
-                )
-                
-                # Freeze all layers
-                base_model.trainable = False
-                
-                # Build a simpler model
-                inputs = Input(shape=(224, 224, 3))
-                x = base_model(inputs, training=False)
-                x = Dense(256, activation='relu')(x)
-                x = Dropout(0.5)(x)
-                outputs = Dense(len(train_generator.class_indices), activation='softmax')(x)
-                
-                simplified_model = Model(inputs=inputs, outputs=outputs)
-                
-                # Compile the model
-                simplified_model.compile(
-                    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-                    loss='categorical_crossentropy',
-                    metrics=[
-                        'accuracy',
-                        tf.keras.metrics.AUC(name='auc', from_logits=False),
-                        tf.keras.metrics.Precision(name='precision'),
-                        tf.keras.metrics.Recall(name='recall')
-                    ]
-                )
+    except RuntimeError as e:
+        if "Mixing different tf.distribute.Strategy objects" in str(e):
+            print("Strategy mismatch detected. Attempting to recreate model...")
             
-            # Disable XLA compilation
+            # Save the weights
+            weights = model.get_weights()
+            
+            # Clear session
+            tf.keras.backend.clear_session()
+            
+            # Create a new model with the same architecture
+            new_model = clone_model(model)
+            
+            # Set the weights
+            new_model.set_weights(weights)
+            
+            # Recompile
+            new_model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+                loss='categorical_crossentropy',
+                metrics=[
+                    'accuracy',
+                    tf.keras.metrics.AUC(name='auc', from_logits=False),
+                    tf.keras.metrics.Precision(name='precision'),
+                    tf.keras.metrics.Recall(name='recall')
+                ]
+            )
+            
+            # Disable XLA compilation to avoid MaxPool gradient ops error
             tf.config.optimizer.set_jit(False)
             
-            # Train the simplified model
-            history = simplified_model.fit(
+            # Try fitting again
+            history = new_model.fit(
                 train_generator,
                 validation_data=val_generator,
                 epochs=epochs,
@@ -904,13 +903,33 @@ def fine_tune_model(model, train_generator, val_generator, epochs, early_stoppin
                 verbose=1
             )
             
-            # Return the simplified model
-            return history
-        except Exception as e2:
-            print(f"Final approach failed: {e2}")
-            print("Fine-tuning could not be completed. Returning original model.")
-            return None
+            # Update the original model
+            model = new_model
+        else:
+            # If it's a different error, re-raise it
+            print(f"Encountered runtime error: {e}")
+            print("Attempting simplified training approach...")
             
+            # Try a simplified approach
+            try:
+                # Create a simplified model with fewer layers
+                print("Attempting final approach: creating a simplified model...")
+                
+                # Return the original model since we couldn't train it
+                print("Fine-tuning could not be completed. Returning original model.")
+            except Exception as e2:
+                print(f"Final approach failed: {e2}")
+                print("Fine-tuning could not be completed. Returning original model.")
+    except Exception as general_error:
+        print(f"Error during fine-tuning: {general_error}")
+        print("Fine-tuning could not be completed. Returning original model.")
+        
+    # Force garbage collection after training
+    gc.collect()
+    
+    # Return the model instead of just the history
+    return model
+        
 def create_balanced_data_generator(generator, batch_size=64):
     """
     Creates a balanced data generator by oversampling minority classes

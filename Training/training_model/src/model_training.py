@@ -15,6 +15,8 @@ import time
 import gc
 import traceback
 
+print("Loading model_training.py...")
+
 # Import PEFT from Hugging Face
 try:
     from peft import (
@@ -1021,7 +1023,7 @@ def create_ensemble_model(model_paths=None, num_classes=9, num_models=3):
         print(f"Created ensemble model with {len(models)} sub-models")
         return ensemble_model
 
-def p(num_classes=9, metadata_dim=0, r=8, alpha=32):
+def build_peft_model_with_metadata(num_classes=9, metadata_dim=0, r=8, alpha=32):
     """
     Build a PEFT model that can handle both image data and metadata features
     
@@ -1099,3 +1101,5 @@ def p(num_classes=9, metadata_dim=0, r=8, alpha=32):
     )
     
     return model
+
+print("Finished loading model_training.py, build_peft_model_with_metadata is defined:", 'build_peft_model_with_metadata' in globals())

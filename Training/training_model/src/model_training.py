@@ -932,7 +932,7 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopp
             os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
             callbacks.append(
                 tf.keras.callbacks.ModelCheckpoint(
-                    filepath=os.path.join(os.path.dirname(model_save_path), 'best_model.h5'),
+                    filepath=os.path.join(os.path.dirname(model_save_path), 'best_model.keras'),
                     monitor='val_loss',
                     save_best_only=True,
                     save_weights_only=False

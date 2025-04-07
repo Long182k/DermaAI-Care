@@ -33,13 +33,13 @@ def set_memory_growth():
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train skin lesion classification model')
-    parser.add_argument('--csv_path', type=str, default='data/ISIC_2019_Training_GroundTruth.csv',
+    parser.add_argument('--csv_path', type=str, default='/kaggle/input/2019-isic-csv/ISIC_2019_Training_GroundTruth.csv',
                         help='Path to CSV file with image metadata')
-    parser.add_argument('--metadata_csv_path', type=str, default=None,
+    parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/2019-isic-csv/ISIC_2019_Training_Metadata.csv",
                         help='Path to CSV file with patient metadata (age, sex, anatomical site)')
-    parser.add_argument('--image_dir', type=str, default='data/exp',
+    parser.add_argument('--image_dir', type=str, default='/kaggle/input/1000-annotated-images/images',
                         help='Directory containing detected images')
-    parser.add_argument('--labels_dir', type=str, default='data/exp/labels',
+    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/1000-annotated-images/labels',
                         help='Directory containing YOLO label files')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for training')

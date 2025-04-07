@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 from tensorflow.keras.preprocessing.image import img_to_array
-from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
+from tensorflow.keras.applications.efficientnet import preprocess_input
 from sklearn.model_selection import StratifiedKFold
 from sklearn.utils.class_weight import compute_class_weight
 import gc

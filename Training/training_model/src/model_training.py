@@ -875,396 +875,105 @@ def create_balanced_data_generator(generator, batch_size=32):
         traceback.print_exc()  # Print full traceback for debugging
         return generator
 
-def fine_tune_model(
-    model, 
-    train_generator, 
-    val_generator, 
-    epochs, 
-    early_stopping_patience,
-    multi_label=False,
-    class_weights=None,
-    batch_size=24
-):
+def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopping_patience=3, multi_label=False, class_weights=None, batch_size=32):
     """
-    Fine-tune the EfficientNet model by unfreezing some layers and training with a lower learning rate
+    Fine-tune the model with a smaller learning rate
     
     Args:
-        model: The pre-trained EfficientNet model to fine-tune
+        model: Pre-trained model
         train_generator: Training data generator
         val_generator: Validation data generator
         epochs: Number of epochs for fine-tuning
-        early_stopping_patience: Number of epochs to wait before early stopping
+        early_stopping_patience: Patience for early stopping
         multi_label: Whether this is a multi-label classification task
-        class_weights: Dictionary of class weights for imbalanced datasets
-        batch_size: Batch size for training, will be reduced if OOM occurs
+        class_weights: Dictionary of class weights
+        batch_size: Batch size for training
     """
-    print(f"Starting fine-tuning process with batch size: {batch_size}")
-    
-    # Clear session to avoid strategy mixing issues
-    tf.keras.backend.clear_session()
-    
-    # Store the original strategy from the model
-    model_strategy = None
-    for layer in model.layers:
-        if hasattr(layer, '_strategy'):
-            model_strategy = layer._strategy
-            break
-    
-    # Create a clone of the model to ensure consistent strategy
-    model_config = model.get_config()
-    weights = model.get_weights()
-    
-    # Define callbacks outside the try blocks so they're accessible everywhere
-    monitor_metric = 'val_loss' if multi_label else 'val_accuracy'
-    mode = 'min' if monitor_metric == 'val_loss' else 'max'
-    
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            monitor=monitor_metric,
-            patience=early_stopping_patience,
-            restore_best_weights=True,
-            mode=mode
-        ),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor=monitor_metric,
-            factor=0.2,
-            patience=5,
-            min_lr=1e-7,
-            verbose=1
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            filepath='models/fine_tuned_checkpoint.keras',
-            monitor=monitor_metric,
-            save_best_only=True,
-            mode=mode,
-            verbose=1
-        ),
-        TimeoutCallback(timeout_seconds=3600),
-        MemoryCleanupCallback(cleanup_frequency=2)
-    ]
-    
-    # Recreate the model with the appropriate strategy
-    if model_strategy:
-        with model_strategy.scope():
-            new_model = tf.keras.Model.from_config(model_config)
-            new_model.set_weights(weights)
-            
-            # Get the EfficientNet base model
-            base_model = new_model.layers[1]
-            
-            # Progressive unfreezing of EfficientNet blocks
-            # EfficientNet has 7 blocks, unfreeze the last 2 blocks
-            for layer in base_model.layers:
-                layer.trainable = False
-                if 'block6' in layer.name or 'block7' in layer.name:
-                    layer.trainable = True
-                    
-            # Also unfreeze the top layers
-            for layer in base_model.layers[-10:]:
-                layer.trainable = True
-    else:
-        with strategy.scope():
-            new_model = tf.keras.Model.from_config(model_config)
-            new_model.set_weights(weights)
-            
-            # Get the EfficientNet base model
-            base_model = new_model.layers[1]
-            
-            # Progressive unfreezing of EfficientNet blocks
-            for layer in base_model.layers:
-                layer.trainable = False
-                if 'block6' in layer.name or 'block7' in layer.name:
-                    layer.trainable = True
-                    
-            # Also unfreeze the top layers
-            for layer in base_model.layers[-10:]:
-                layer.trainable = True
-    
-    # For multi-label classification with class weights, we need a custom loss
-    if multi_label and class_weights:
-        print(f"Applying class weights for fine-tuning: {class_weights}")
+    try:
+        # Clear session to avoid strategy mixing issues
+        tf.keras.backend.clear_session()
         
-        try:
-            # Memory optimization step
-            gpus = tf.config.list_physical_devices('GPU')
-            if gpus:
-                try:
-                    for gpu in gpus:
-                        try:
-                            tf.config.experimental.set_memory_growth(gpu, True)
-                        except:
-                            print("GPU memory growth already set")
-                except Exception as e:
-                    print(f"Error setting memory growth: {e}")
-            
-            # Temporarily disable mixed precision for better stability
-            original_policy = tf.keras.mixed_precision.global_policy()
-            tf.keras.mixed_precision.set_global_policy('float32')
-            
-            # Create custom weighted binary crossentropy
-            def weighted_binary_crossentropy(y_true, y_pred):
-                y_true = tf.cast(y_true, tf.float32)
-                y_pred = tf.cast(y_pred, tf.float32)
-                
-                epsilon = tf.keras.backend.epsilon()
-                y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
-                bce = -y_true * tf.math.log(y_pred) - (1.0 - y_true) * tf.math.log(1.0 - y_pred)
-                
-                weights_tensor = tf.convert_to_tensor(
-                    [float(class_weights.get(i, 1.0)) for i in range(new_model.output_shape[-1])],
-                    dtype=tf.float32
-                )
-                
-                class_weighted_bce = bce * (y_true * weights_tensor + (1 - y_true))
-                return tf.reduce_mean(tf.reduce_mean(class_weighted_bce, axis=-1))
-            
-            # Compile with custom loss
-            if model_strategy:
-                with model_strategy.scope():
-                    new_model.compile(
-                        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                        loss=weighted_binary_crossentropy,
-                        metrics=[
-                            tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-                            tf.keras.metrics.AUC(name='auc', multi_label=True),
-                            tf.keras.metrics.Precision(name='precision'),
-                            tf.keras.metrics.Recall(name='recall')
-                        ]
-                    )
-            else:
-                with strategy.scope():
-                    new_model.compile(
-                        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                        loss=weighted_binary_crossentropy,
-                        metrics=[
-                            tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-                            tf.keras.metrics.AUC(name='auc', multi_label=True),
-                            tf.keras.metrics.Precision(name='precision'),
-                            tf.keras.metrics.Recall(name='recall')
-                        ]
-                    )
-            
-            # Train with the provided batch size
-            try_batch_size = batch_size
-            print(f"Fine-tuning with batch size of {try_batch_size}")
-            
-            history = new_model.fit(
-                train_generator,
-                validation_data=val_generator,
-                epochs=epochs,
-                callbacks=callbacks,
-                batch_size=try_batch_size,
-                verbose=1,
-                class_weight=None  # Weights handled in loss function
-            )
-            
-            # Copy weights back to original model
-            model.set_weights(new_model.get_weights())
-            
-            # Cleanup
-            del new_model
-            gc.collect()
-            
-            # Restore original mixed precision policy
-            tf.keras.mixed_precision.set_global_policy(original_policy)
-            
-            return history
-            
-        except Exception as e:
-            print(f"Error during fine-tuning with custom loss: {e}")
-            traceback.print_exc()
-            
-            # Cleanup
-            gc.collect()
-            if 'original_policy' in locals():
-                tf.keras.mixed_precision.set_global_policy(original_policy)
-            
-            # Fallback with smaller batch size
-            try:
-                print("Trying with a smaller batch size...")
-                tf.keras.backend.clear_session()
-                gc.collect()
-                
-                try_batch_size = batch_size // 2
-                
-                # Recreate model with consistent strategy
-                if model_strategy:
-                    with model_strategy.scope():
-                        new_model = tf.keras.Model.from_config(model_config)
-                        new_model.set_weights(weights)
-                        
-                        # Only unfreeze last block
-                        base_model = new_model.layers[1]
-                        for layer in base_model.layers:
-                            layer.trainable = False
-                            if 'block7' in layer.name:
-                                layer.trainable = True
-                        
-                        new_model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=5e-6),
-                            loss=tf.keras.losses.BinaryCrossentropy(),
-                            metrics=[
-                                BinaryAccuracy(name='accuracy'),
-                                AUC(name='auc', multi_label=True),
-                                Precision(name='precision'),
-                                Recall(name='recall')
-                            ]
-                        )
+        # Enable mixed precision for better performance
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+        
+        # Set memory growth for GPUs
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        
+        # Unfreeze EfficientNet blocks progressively
+        for layer in model.layers:
+            if isinstance(layer, tf.keras.layers.BatchNormalization):
+                layer.trainable = True
+            elif 'efficientnetb0' in layer.name:
+                # Unfreeze last two blocks
+                if 'block6' in layer.name or 'block7' in layer.name:
+                    layer.trainable = True
                 else:
-                    with strategy.scope():
-                        new_model = tf.keras.Model.from_config(model_config)
-                        new_model.set_weights(weights)
-                        
-                        # Only unfreeze last block
-                        base_model = new_model.layers[1]
-                        for layer in base_model.layers:
-                            layer.trainable = False
-                            if 'block7' in layer.name:
-                                layer.trainable = True
-                        
-                        new_model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=5e-6),
-                            loss=tf.keras.losses.BinaryCrossentropy(),
-                            metrics=[
-                                BinaryAccuracy(name='accuracy'),
-                                AUC(name='auc', multi_label=True),
-                                Precision(name='precision'),
-                                Recall(name='recall')
-                            ]
-                        )
-                
-                history = new_model.fit(
-                    train_generator,
-                    validation_data=val_generator,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    batch_size=try_batch_size,
-                    verbose=1,
-                    class_weight=None
-                )
-                
-                model.set_weights(new_model.get_weights())
-                del new_model
-                gc.collect()
-                return history
-                
-            except Exception as inner_e:
-                print(f"Error during fallback fine-tuning: {inner_e}")
-                return None
-    
-    else:
-        # Standard training without class weights
-        if multi_label:
-            loss = tf.keras.losses.BinaryCrossentropy()
-        else:
-            loss = focal_loss(gamma=2.0, alpha=0.25)
+                    layer.trainable = False
         
-        metrics = [
-            'accuracy',
-            tf.keras.metrics.AUC(name='auc', from_logits=False),
-            tf.keras.metrics.Precision(name='precision'),
-            tf.keras.metrics.Recall(name='recall')
-        ]
-        
-        # Compile the model
-        if model_strategy:
-            with model_strategy.scope():
-                new_model.compile(
-                    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                    loss=loss,
-                    metrics=metrics
-                )
-        else:
-            with strategy.scope():
-                new_model.compile(
-                    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                    loss=loss,
-                    metrics=metrics
-                )
-        
-        try:
-            try_batch_size = batch_size
-            print(f"Fine-tuning with batch size of {try_batch_size}")
-            
-            history = new_model.fit(
-                train_generator,
-                validation_data=val_generator,
-                epochs=epochs,
-                callbacks=callbacks,
-                batch_size=try_batch_size,
-                class_weight=class_weights if not multi_label else None,
+        # Define callbacks
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=early_stopping_patience,
+                restore_best_weights=True,
+                verbose=1
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.2,
+                patience=2,
+                min_lr=1e-6,
+                verbose=1
+            ),
+            tf.keras.callbacks.ModelCheckpoint(
+                filepath=os.path.join(args.model_save_path, 'best_model.keras'),
+                monitor='val_loss',
+                save_best_only=True,
                 verbose=1
             )
+        ]
+        
+        # Define custom loss function for multi-label classification with class weights
+        if multi_label and class_weights:
+            def weighted_binary_crossentropy(y_true, y_pred):
+                # Convert class weights to tensor
+                weights = tf.constant(list(class_weights.values()), dtype=tf.float32)
+                # Calculate weighted loss
+                loss = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+                weighted_loss = loss * weights
+                return tf.reduce_mean(weighted_loss)
             
-            model.set_weights(new_model.get_weights())
-            del new_model
-            gc.collect()
-            return history
-            
-        except Exception as e:
-            print(f"Error during fine-tuning: {e}")
-            traceback.print_exc()
-            
-            try:
-                print("Trying with a smaller batch size...")
-                tf.keras.backend.clear_session()
-                gc.collect()
-                
-                try_batch_size = batch_size // 2
-                
-                if model_strategy:
-                    with model_strategy.scope():
-                        new_model = tf.keras.Model.from_config(model_config)
-                        new_model.set_weights(weights)
-                        
-                        # Only unfreeze last block for memory efficiency
-                        base_model = new_model.layers[1]
-                        for layer in base_model.layers:
-                            layer.trainable = False
-                            if 'block7' in layer.name:
-                                layer.trainable = True
-                        
-                        new_model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=5e-6),
-                            loss=loss,
-                            metrics=metrics
-                        )
-                else:
-                    with strategy.scope():
-                        new_model = tf.keras.Model.from_config(model_config)
-                        new_model.set_weights(weights)
-                        
-                        # Only unfreeze last block for memory efficiency
-                        base_model = new_model.layers[1]
-                        for layer in base_model.layers:
-                            layer.trainable = False
-                            if 'block7' in layer.name:
-                                layer.trainable = True
-                        
-                        new_model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=5e-6),
-                            loss=loss,
-                            metrics=metrics
-                        )
-                
-                history = new_model.fit(
-                    train_generator,
-                    validation_data=val_generator,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    batch_size=try_batch_size,
-                    class_weight=class_weights if not multi_label else None,
-                    verbose=1
-                )
-                
-                model.set_weights(new_model.get_weights())
-                del new_model
-                gc.collect()
-                return history
-                
-            except Exception as final_e:
-                print(f"All fine-tuning attempts failed: {final_e}")
-                return None
+            loss_fn = weighted_binary_crossentropy
+        else:
+            loss_fn = 'binary_crossentropy' if multi_label else 'categorical_crossentropy'
+        
+        # Compile model with smaller learning rate
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+            loss=loss_fn,
+            metrics=['accuracy', tf.keras.metrics.AUC()]
+        )
+        
+        # Train model
+        history = model.fit(
+            train_generator,
+            validation_data=val_generator,
+            epochs=epochs,
+            callbacks=callbacks,
+            class_weight=class_weights if not multi_label else None,
+            batch_size=batch_size
+        )
+        
+        return history
+        
+    except Exception as e:
+        print(f"Error during fine-tuning: {str(e)}")
+        traceback.print_exc()
+        return None
 
 def setup_gpu(memory_limit=None, allow_growth=True):
     """

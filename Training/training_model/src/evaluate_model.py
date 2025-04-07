@@ -37,10 +37,13 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
         Dictionary containing evaluation metrics
     """
     try:
-        # Create output directory if specified
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Set default output directory if not provided
+        if output_dir is None:
+            output_dir = "/kaggle/working/DermaAI-Care/Training/training_model/models/"
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Get predictions
         print("Generating predictions...")
@@ -148,42 +151,28 @@ def evaluate_singlelabel(model, test_generator, predictions, class_names, output
     report = classification_report(y_true, y_pred, target_names=class_names, output_dict=True)
     cm = confusion_matrix(y_true, y_pred)
     
-    if output_dir:
-        # Plot confusion matrix
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
-        plt.title('Confusion Matrix')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-        plt.savefig(os.path.join(output_dir, f'confusion_matrix_{timestamp}.png'))
-        plt.close()
-        
-        # Save classification report
-        report_df = pd.DataFrame(report).transpose()
-        report_df.to_csv(os.path.join(output_dir, f'classification_report_{timestamp}.csv'))
-        
-        # Calculate and plot ROC curves
-        plt.figure(figsize=(10, 8))
-        for i, class_name in enumerate(class_names):
-            y_true_binary = (y_true == i).astype(int)
-            y_pred_proba = predictions[:, i]
-            
-            fpr, tpr, _ = roc_curve(y_true_binary, y_pred_proba)
-            roc_auc = auc(fpr, tpr)
-            
-            plt.plot(fpr, tpr, label=f'{class_name} (AUC = {roc_auc:.2f})')
-        
-        plt.plot([0, 1], [0, 1], 'k--')
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC Curves')
-        plt.legend(loc='lower right')
-        plt.savefig(os.path.join(output_dir, f'roc_curves_{timestamp}.png'))
-        plt.close()
+    # Plot and save confusion matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
+    plt.title('Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    cm_path = os.path.join(output_dir, f'confusion_matrix_{timestamp}.png')
+    plt.savefig(cm_path)
+    plt.close()
+    print(f"Confusion matrix saved to: {cm_path}")
+    
+    # Save classification report
+    report_df = pd.DataFrame(report).transpose()
+    report_path = os.path.join(output_dir, f'classification_report_{timestamp}.csv')
+    report_df.to_csv(report_path)
+    print(f"Classification report saved to: {report_path}")
     
     return {
         'classification_report': report,
-        'confusion_matrix': cm
+        'confusion_matrix': cm,
+        'confusion_matrix_path': cm_path,
+        'report_path': report_path
     }
 
 def plot_training_history(history, output_dir=None):
@@ -261,3 +250,33 @@ def roc_auc_score(y_true, y_score):
         return auc(fpr, tpr)
     except:
         return 0.5
+
+def plot_confusion_matrix(y_true, y_pred, class_names, output_dir):
+    """
+    Plot and save confusion matrix
+    
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        class_names: List of class names
+        output_dir: Directory to save the plot
+    """
+    # Create confusion matrix
+    cm = confusion_matrix(y_true, y_pred)
+    
+    # Create figure
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names,
+                yticklabels=class_names)
+    plt.title('Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    
+    # Save the plot
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    cm_path = os.path.join(output_dir, f'confusion_matrix_{timestamp}.png')
+    plt.savefig(cm_path)
+    plt.close()
+    
+    return cm_path

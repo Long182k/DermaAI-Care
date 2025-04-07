@@ -5,6 +5,7 @@ import numpy as np
 import random
 import gc
 import mlflow
+import traceback
 
 # Import custom modules
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
@@ -194,75 +195,34 @@ def main():
                 print(f"Error during fine-tuning: {fine_tune_error}")
                 traceback.print_exc()
         
-        # Evaluate the model
-        print("Evaluating model...")
-        try:
-            # Use the updated evaluate_model function with proper parameters
-            metrics = evaluate_model(
-                model, 
-                val_generator, 
-                class_indices=diagnosis_to_idx,
-                save_path="/kaggle/working/DermaAI-Care/Training/training_model/models"
-            )
-            
-            # Log evaluation metrics to MLflow if requested
-            if args.log_to_mlflow and metrics:
-                try:
-                    with mlflow.start_run(run_name=f"evaluation_fold_{args.fold_idx}"):
-                        # Log comprehensive metrics
-                        mlflow.log_metric("val_accuracy", metrics['accuracy'])
-                        mlflow.log_metric("val_precision", metrics['weighted_precision'])
-                        mlflow.log_metric("val_recall", metrics['weighted_recall'])
-                        mlflow.log_metric("val_f1", metrics['weighted_f1'])
-                        mlflow.log_metric("val_auc", metrics['weighted_auc'])
-                        mlflow.log_metric("val_specificity", metrics['weighted_specificity'])
-                        mlflow.log_metric("val_icbhi_score", metrics['weighted_icbhi_score'])
-                        
-                        # Log confusion matrix and ROC curve images
-                        for artifact_path in [
-                            f"/kaggle/working/DermaAI-Care/Training/training_model/models/confusion_matrix_*.png",
-                            f"/kaggle/working/DermaAI-Care/Training/training_model/models/roc_curves_*.png"
-                        ]:
-                            try:
-                                import glob
-                                for file_path in glob.glob(artifact_path):
-                                    mlflow.log_artifact(file_path)
-                            except Exception as artifact_error:
-                                print(f"Error logging artifact {artifact_path}: {artifact_error}")
-                except Exception as mlflow_error:
-                    print(f"Error logging metrics to MLflow: {mlflow_error}")
-                    traceback.print_exc()
-            
-            # Print final summary
-            if metrics:
-                print("\nFinal Model Evaluation Summary:")
-                print("=" * 60)
-                print(f"Validation Accuracy:         {metrics['accuracy']:.4f}")
-                print(f"Validation Precision:        {metrics['weighted_precision']:.4f}")
-                print(f"Validation Recall/Sensitivity: {metrics['weighted_recall']:.4f}")
-                print(f"Validation F1 Score:         {metrics['weighted_f1']:.4f}")
-                print(f"Validation AUC:              {metrics['weighted_auc']:.4f}")
-                print(f"Validation Specificity:      {metrics['weighted_specificity']:.4f}")
-                print(f"Validation ICBHI Score:      {metrics['weighted_icbhi_score']:.4f}")
-                print("=" * 60)
-            
-        except Exception as eval_error:
-            print(f"Error during evaluation: {eval_error}")
-            traceback.print_exc()
-            
-    except Exception as training_error:
-        print(f"Error in main training process: {training_error}")
+        # Evaluate model
+        print("\nEvaluating model...")
+        metrics = evaluate_model(
+            model=model,
+            test_generator=val_generator,
+            class_names=list(diagnosis_to_idx.keys()),
+            output_dir=os.path.join(args.model_save_path, "evaluation_results")
+        )
+        
+        if metrics:
+            print("\nEvaluation Metrics:")
+            print("-" * 55)
+            print(f"Validation Accuracy: {metrics.get('accuracy', 0):.4f}")
+            print(f"Validation Precision: {metrics.get('weighted_precision', 0):.4f}")
+            print(f"Validation Recall/Sensitivity: {metrics.get('weighted_recall', 0):.4f}")
+            print(f"Validation F1 Score: {metrics.get('weighted_f1', 0):.4f}")
+            print(f"Validation AUC: {metrics.get('weighted_auc', 0):.4f}")
+            print(f"Validation Specificity: {metrics.get('weighted_specificity', 0):.4f}")
+            print(f"Validation ICBHI Score: {metrics.get('weighted_icbhi_score', 0):.4f}")
+        
+    except Exception as e:
+        print(f"Error in main training process: {str(e)}")
         traceback.print_exc()
-    
-    # Clean up to prevent memory leaks
-    tf.keras.backend.clear_session()
-    gc.collect()
-    print("Training completed.")
+        return None
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        import traceback
-        print(f"Error in main: {e}")
+        print(f"Error in main: {str(e)}")
         traceback.print_exc()

@@ -54,7 +54,7 @@ def create_augmentation_pipeline(seed=42, strength='high'):
             # More aggressive augmentations for high strength
             tf.keras.layers.RandomTranslation(0.15, 0.15, seed=seed),  # Increased translation
             # Add color jitter with hue and saturation
-            tf.keras.layers.experimental.preprocessing.RandomContrast(0.3, seed=seed),
+            tf.keras.layers.RandomContrast(0.3, seed=seed),  # Updated to use current API
             # Add slight gaussian noise for robustness
             tf.keras.layers.GaussianNoise(0.05, seed=seed)
         ])

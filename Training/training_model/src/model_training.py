@@ -873,6 +873,35 @@ def fine_tune_model(
     model_config = model.get_config()
     weights = model.get_weights()
     
+    # Define callbacks outside the try blocks so they're accessible everywhere
+    monitor_metric = 'val_loss' if multi_label else 'val_accuracy'
+    mode = 'min' if monitor_metric == 'val_loss' else 'max'
+    
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor=monitor_metric,
+            patience=early_stopping_patience,
+            restore_best_weights=True,
+            mode=mode
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor=monitor_metric,
+            factor=0.2,
+            patience=5,
+            min_lr=1e-7,
+            verbose=1
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath='models/fine_tuned_checkpoint.keras',
+            monitor=monitor_metric,
+            save_best_only=True,
+            mode=mode,
+            verbose=1
+        ),
+        TimeoutCallback(timeout_seconds=3600),
+        MemoryCleanupCallback(cleanup_frequency=2)  # More frequent cleanup
+    ]
+    
     # Recreate the model with the appropriate strategy
     if model_strategy:
         with model_strategy.scope():
@@ -965,35 +994,6 @@ def fine_tune_model(
                         ]
                     )
             
-            # Set up callbacks
-            monitor_metric = 'val_loss'
-            mode = 'min'
-            
-            callbacks = [
-                tf.keras.callbacks.EarlyStopping(
-                    monitor=monitor_metric,
-                    patience=early_stopping_patience,
-                    restore_best_weights=True,
-                    mode=mode
-                ),
-                tf.keras.callbacks.ReduceLROnPlateau(
-                    monitor=monitor_metric,
-                    factor=0.2,
-                    patience=5,
-                    min_lr=1e-7,
-                    verbose=1
-                ),
-                tf.keras.callbacks.ModelCheckpoint(
-                    filepath='models/fine_tuned_checkpoint.keras',
-                    monitor=monitor_metric,
-                    save_best_weights=True,
-                    mode=mode,
-                    verbose=1
-                ),
-                TimeoutCallback(timeout_seconds=3600),
-                MemoryCleanupCallback(cleanup_frequency=2)  # More frequent cleanup
-            ]
-            
             # Use provided batch size
             try_batch_size = batch_size
             
@@ -1003,7 +1003,7 @@ def fine_tune_model(
                 train_generator,
                 validation_data=val_generator,
                 epochs=epochs,
-                callbacks=callbacks,
+                callbacks=callbacks,  # Use the predefined callbacks
                 batch_size=try_batch_size,
                 verbose=1,
                 class_weight=None  # Don't use class_weight as we handle it in the loss
@@ -1091,7 +1091,7 @@ def fine_tune_model(
                     train_generator,
                     validation_data=val_generator,
                     epochs=epochs,
-                    callbacks=callbacks,
+                    callbacks=callbacks,  # Use the predefined callbacks
                     batch_size=try_batch_size,
                     class_weight=None,
                     verbose=1
@@ -1151,12 +1151,17 @@ def fine_tune_model(
                                 metrics=['accuracy']
                             )
                     
+                    # Use minimal callbacks for last resort
+                    minimal_callbacks = [
+                        TimeoutCallback(timeout_seconds=1800)
+                    ]
+                    
                     # Minimal training
                     history = new_model.fit(
                         train_generator,
                         validation_data=val_generator,
                         epochs=min(3, epochs),  # Reduced epochs
-                        callbacks=[TimeoutCallback(timeout_seconds=1800)],
+                        callbacks=minimal_callbacks,  # Use minimal callbacks
                         batch_size=try_batch_size,  # Very small batch
                         verbose=1
                     )
@@ -1166,8 +1171,9 @@ def fine_tune_model(
                     gc.collect()
                     return history
                     
-                except:
-                    print("All fine-tuning attempts failed.")
+                except Exception as final_e:
+                    print(f"All fine-tuning attempts failed: {final_e}")
+                    traceback.print_exc()
                     return None
             
     else:
@@ -1211,35 +1217,6 @@ def fine_tune_model(
                     metrics=metrics
                 )
         
-        # Set up callbacks for fine-tuning
-        monitor_metric = 'val_loss' if multi_label else 'val_accuracy'
-        mode = 'min' if monitor_metric == 'val_loss' else 'max'
-        
-        callbacks = [
-            tf.keras.callbacks.EarlyStopping(
-                monitor=monitor_metric,
-                patience=early_stopping_patience,
-                restore_best_weights=True,
-                mode=mode
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor=monitor_metric,
-                factor=0.2,
-                patience=5,
-                min_lr=1e-7,
-                verbose=1
-            ),
-            tf.keras.callbacks.ModelCheckpoint(
-                filepath='models/fine_tuned_checkpoint.keras',
-                monitor=monitor_metric,
-                save_best_weights=True,
-                mode=mode,
-                verbose=1
-            ),
-            TimeoutCallback(timeout_seconds=3600),  # 1 hour timeout
-            MemoryCleanupCallback(cleanup_frequency=2)
-        ]
-        
         # Fine-tune the model with provided batch size
         try:
             try_batch_size = batch_size
@@ -1249,7 +1226,7 @@ def fine_tune_model(
                 train_generator,
                 validation_data=val_generator,
                 epochs=epochs,
-                callbacks=callbacks,
+                callbacks=callbacks,  # Use the predefined callbacks
                 batch_size=try_batch_size,
                 class_weight=class_weights if not multi_label else None,
                 verbose=1
@@ -1318,7 +1295,7 @@ def fine_tune_model(
                     train_generator,
                     validation_data=val_generator,
                     epochs=epochs,
-                    callbacks=callbacks,
+                    callbacks=callbacks,  # Use the predefined callbacks
                     batch_size=try_batch_size,
                     class_weight=class_weights if not multi_label else None,
                     verbose=1
@@ -1331,6 +1308,7 @@ def fine_tune_model(
                 
             except Exception as final_e:
                 print(f"Fine-tuning failed with all attempts: {final_e}")
+                traceback.print_exc()
                 return None
 
 def setup_gpu(memory_limit=None, allow_growth=True):

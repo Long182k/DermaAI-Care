@@ -175,7 +175,8 @@ def main():
                         args.early_stopping,
                         multi_label=True,
                         class_weights=class_weights,
-                        batch_size=args.batch_size
+                        batch_size=args.batch_size,
+                        model_save_path=model_save_path
                     )
                     
                     history = fine_tune_history

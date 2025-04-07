@@ -875,97 +875,102 @@ def create_balanced_data_generator(generator, batch_size=32):
         traceback.print_exc()  # Print full traceback for debugging
         return generator
 
-def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopping_patience=3, multi_label=False, class_weights=None, batch_size=32):
+def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopping_patience=3, 
+                   multi_label=True, class_weights=None, batch_size=32, model_save_path=None):
     """
-    Fine-tune the model with a smaller learning rate
+    Fine-tune the model by unfreezing more layers and training with a smaller learning rate.
     
     Args:
-        model: Pre-trained model
+        model: The pre-trained model to fine-tune
         train_generator: Training data generator
         val_generator: Validation data generator
         epochs: Number of epochs for fine-tuning
         early_stopping_patience: Patience for early stopping
-        multi_label: Whether this is a multi-label classification task
-        class_weights: Dictionary of class weights
+        multi_label: Whether the model is for multi-label classification
+        class_weights: Dictionary of class weights for imbalanced data
         batch_size: Batch size for training
+        model_save_path: Path to save the best model during fine-tuning
+    
+    Returns:
+        History object containing training metrics
     """
     try:
-        # Clear session to avoid strategy mixing issues
-        tf.keras.backend.clear_session()
-        
-        # Enable mixed precision for better performance
+        # Set up mixed precision training
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(policy)
         
-        # Unfreeze EfficientNet blocks progressively
+        # Unfreeze more layers for fine-tuning
         for layer in model.layers:
             if isinstance(layer, tf.keras.layers.BatchNormalization):
-                layer.trainable = True
-            elif 'efficientnetb0' in layer.name:
-                # Unfreeze last two blocks
-                if 'block6' in layer.name or 'block7' in layer.name:
+                layer.trainable = True  # Keep BatchNormalization layers trainable
+            elif 'efficientnet' in layer.name:
+                # Unfreeze the last two blocks of EfficientNet
+                if any(block in layer.name for block in ['block6', 'block7']):
                     layer.trainable = True
                 else:
                     layer.trainable = False
+            else:
+                layer.trainable = True
         
         # Define callbacks
         callbacks = [
             tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
                 patience=early_stopping_patience,
-                restore_best_weights=True,
-                verbose=1
+                restore_best_weights=True
             ),
             tf.keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
-                factor=0.2,
-                patience=2,
-                min_lr=1e-6,
-                verbose=1
-            ),
-            tf.keras.callbacks.ModelCheckpoint(
-                filepath=os.path.join(args.model_save_path, 'best_model.h5'),
-                monitor='val_loss',
-                save_best_only=True,
-                verbose=1
+                factor=0.1,
+                patience=early_stopping_patience // 2,
+                min_lr=1e-7
             )
         ]
         
-        # Define custom loss function for multi-label classification with class weights
-        if multi_label and class_weights:
-            def weighted_binary_crossentropy(y_true, y_pred):
-                # Convert class weights to tensor
-                weights = tf.constant(list(class_weights.values()), dtype=tf.float32)
-                # Calculate weighted loss
-                loss = tf.keras.losses.binary_crossentropy(y_true, y_pred)
-                weighted_loss = loss * weights
-                return tf.reduce_mean(weighted_loss)
-            
-            loss_fn = weighted_binary_crossentropy
+        # Add model checkpoint if save path is provided
+        if model_save_path:
+            os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+            callbacks.append(
+                tf.keras.callbacks.ModelCheckpoint(
+                    filepath=os.path.join(os.path.dirname(model_save_path), 'best_model.h5'),
+                    monitor='val_loss',
+                    save_best_only=True,
+                    save_weights_only=False
+                )
+            )
+        
+        # Define loss function based on multi-label setting
+        if multi_label:
+            loss_fn = tf.keras.losses.BinaryCrossentropy()
         else:
-            loss_fn = 'binary_crossentropy' if multi_label else 'categorical_crossentropy'
+            loss_fn = tf.keras.losses.CategoricalCrossentropy()
         
         # Compile model with smaller learning rate
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
             loss=loss_fn,
-            metrics=['accuracy', tf.keras.metrics.AUC()]
+            metrics=[
+                'accuracy',
+                tf.keras.metrics.AUC(),
+                tf.keras.metrics.Precision(),
+                tf.keras.metrics.Recall()
+            ]
         )
         
-        # Train model
+        # Train the model
         history = model.fit(
             train_generator,
             validation_data=val_generator,
             epochs=epochs,
             callbacks=callbacks,
-            class_weight=class_weights if not multi_label else None,
+            class_weight=class_weights,
             batch_size=batch_size
         )
         
         return history
         
     except Exception as e:
-        print(f"Error during fine-tuning: {str(e)}")
+        print(f"Error during fine-tuning: {e}")
         traceback.print_exc()
         return None
 

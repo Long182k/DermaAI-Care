@@ -143,40 +143,40 @@ def build_peft_model(num_classes, r=8, alpha=32, multi_label=False):
     
     try:
         # Use the global strategy defined at the module level
-        with strategy.scope():
-            # Create the base model with efficient memory usage
-            base_model = InceptionResNetV2(
-                weights='imagenet',
-                include_top=False,
-                input_shape=(224, 224, 3),
-                pooling='avg'
-            )
-            
-            # Freeze the base model
-            base_model.trainable = False
-            
-            # Build the model using Functional API
-            inputs = Input(shape=(224, 224, 3))
-            x = base_model(inputs, training=False)
-            
-            # Apply LoRA to the final dense layer
-            dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
-            dense_output = dense_layer(x)
-            
-            # Add LoRA adaptation
-            lora_adaptation = LoRALayer(512, 512, r=r, alpha=alpha, name='lora_adaptation')(dense_output)
-            
-            # Combine original dense output with LoRA adaptation
-            combined = tf.keras.layers.Add()([dense_output, lora_adaptation])
-            
-            x = Dropout(0.5)(combined)
+    with strategy.scope():
+        # Create the base model with efficient memory usage
+        base_model = InceptionResNetV2(
+            weights='imagenet',
+            include_top=False,
+            input_shape=(224, 224, 3),
+            pooling='avg'
+        )
+        
+        # Freeze the base model
+        base_model.trainable = False
+        
+        # Build the model using Functional API
+        inputs = Input(shape=(224, 224, 3))
+        x = base_model(inputs, training=False)
+        
+        # Apply LoRA to the final dense layer
+        dense_layer = Dense(512, activation='relu', kernel_initializer='he_normal', name='dense_1')
+        dense_output = dense_layer(x)
+        
+        # Add LoRA adaptation
+        lora_adaptation = LoRALayer(512, 512, r=r, alpha=alpha, name='lora_adaptation')(dense_output)
+        
+        # Combine original dense output with LoRA adaptation
+        combined = tf.keras.layers.Add()([dense_output, lora_adaptation])
+        
+        x = Dropout(0.5)(combined)
             
             # Use sigmoid activation for multi-label, softmax for single-label
             final_activation = 'sigmoid' if multi_label else 'softmax'
             outputs = Dense(num_classes, activation=final_activation, kernel_initializer='he_normal')(x)
-            
-            model = Model(inputs=inputs, outputs=outputs)
-            
+        
+        model = Model(inputs=inputs, outputs=outputs)
+        
             # Choose appropriate loss and metrics based on the task
             if multi_label:
                 loss = tf.keras.losses.BinaryCrossentropy()
@@ -189,7 +189,7 @@ def build_peft_model(num_classes, r=8, alpha=32, multi_label=False):
             else:
                 loss = focal_loss(gamma=2.0, alpha=0.25)
                 metrics = [
-                    'accuracy',
+                'accuracy',
                     AUC(name='auc', from_logits=False),
                     Precision(name='precision'),
                     Recall(name='recall')
@@ -200,10 +200,10 @@ def build_peft_model(num_classes, r=8, alpha=32, multi_label=False):
                 optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
                 loss=loss,
                 metrics=metrics
-            )
-            
-            return model
-            
+        )
+        
+        return model
+
     except Exception as e:
         print(f"Error building model: {e}")
         # Restore original policy on error
@@ -217,26 +217,26 @@ class TimeoutCallback(tf.keras.callbacks.Callback):
         super(TimeoutCallback, self).__init__()
         self.timeout_seconds = timeout_seconds
         self.start_time = None
-    
+        
     def on_train_begin(self, logs=None):
         self.start_time = time.time()
-    
+        
     def on_epoch_end(self, epoch, logs=None):
         if time.time() - self.start_time > self.timeout_seconds:
             print(f"\nStopping training due to timeout ({self.timeout_seconds} seconds)")
             self.model.stop_training = True
-
+            
 class MemoryCleanupCallback(tf.keras.callbacks.Callback):
     def __init__(self, cleanup_frequency=5):
         super(MemoryCleanupCallback, self).__init__()
         self.cleanup_frequency = cleanup_frequency
         self.epoch_count = 0
-    
+        
     def on_epoch_end(self, epoch, logs=None):
         self.epoch_count += 1
         if self.epoch_count % self.cleanup_frequency == 0:
             # Perform memory cleanup
-            gc.collect()
+        gc.collect()
             tf.keras.backend.clear_session()
             print("\nPerformed memory cleanup")
             
@@ -323,11 +323,11 @@ def train_model(
             verbose=1
         ),
         tf.keras.callbacks.ModelCheckpoint(
-            filepath='models/checkpoint.keras',
+        filepath='models/checkpoint.keras',
             monitor=monitor_metric,
             save_best_only=True,
             mode=mode,
-            verbose=1
+        verbose=1
         ),
         TimeoutCallback(timeout_seconds=3600),  # 1 hour timeout
         MemoryCleanupCallback(cleanup_frequency=2)  # More frequent cleanup
@@ -911,8 +911,8 @@ def fine_tune_model(
             # Unfreeze the last few layers of the base model
             base_model = new_model.layers[1]  # Get the InceptionResNetV2 model
             for layer in base_model.layers[-30:]:  # Unfreeze last 30 layers
-                layer.trainable = True
-    else:
+                    layer.trainable = True
+        else:
         # If no strategy detected, recreate with the global strategy
         with strategy.scope():
             new_model = tf.keras.Model.from_config(model_config)
@@ -921,7 +921,7 @@ def fine_tune_model(
             # Unfreeze the last few layers of the base model
             base_model = new_model.layers[1]  # Get the InceptionResNetV2 model
             for layer in base_model.layers[-30:]:  # Unfreeze last 30 layers
-                layer.trainable = True
+                            layer.trainable = True
     
     # For multi-label classification with class weights, we need a custom loss
     if multi_label and class_weights:
@@ -974,7 +974,7 @@ def fine_tune_model(
                     new_model.compile(
                         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
                         loss=weighted_binary_crossentropy,
-                        metrics=[
+            metrics=[
                             tf.keras.metrics.BinaryAccuracy(name='accuracy'),
                             tf.keras.metrics.AUC(name='auc', multi_label=True),
                             tf.keras.metrics.Precision(name='precision'),
@@ -989,11 +989,11 @@ def fine_tune_model(
                         metrics=[
                             tf.keras.metrics.BinaryAccuracy(name='accuracy'),
                             tf.keras.metrics.AUC(name='auc', multi_label=True),
-                            tf.keras.metrics.Precision(name='precision'),
-                            tf.keras.metrics.Recall(name='recall')
-                        ]
-                    )
-            
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        )
+        
             # Use provided batch size
             try_batch_size = batch_size
             
@@ -1020,8 +1020,8 @@ def fine_tune_model(
             tf.keras.mixed_precision.set_global_policy(original_policy)
             
             return history
-            
-        except Exception as e:
+        
+    except Exception as e:
             print(f"Error during fine-tuning with custom loss: {e}")
             traceback.print_exc()
             
@@ -1034,7 +1034,7 @@ def fine_tune_model(
             try:
                 print("Trying with a smaller batch size...")
                 # Reset the model and session
-                tf.keras.backend.clear_session()
+        tf.keras.backend.clear_session()
                 gc.collect()
                 
                 try_batch_size = batch_size // 2
@@ -1055,7 +1055,7 @@ def fine_tune_model(
                         new_model.compile(
                             optimizer=tf.keras.optimizers.Adam(learning_rate=5e-6),  # Lower learning rate
                             loss=tf.keras.losses.BinaryCrossentropy(),
-                            metrics=[
+            metrics=[
                                 BinaryAccuracy(name='accuracy'),
                                 AUC(name='auc', multi_label=True),
                                 Precision(name='precision'),
@@ -1090,12 +1090,12 @@ def fine_tune_model(
                 history = new_model.fit(
                     train_generator,
                     validation_data=val_generator,
-                    epochs=epochs,
+                epochs=epochs,
                     callbacks=callbacks,  # Use the predefined callbacks
                     batch_size=try_batch_size,
                     class_weight=None,
-                    verbose=1
-                )
+                verbose=1
+            )
                 
                 # Copy weights back to original model
                 model.set_weights(new_model.get_weights())
@@ -1112,24 +1112,24 @@ def fine_tune_model(
                 # Last resort with minimal setup
                 try:
                     print("Trying minimal fine-tuning setup...")
-                    tf.keras.backend.clear_session()
+                tf.keras.backend.clear_session()
                     gc.collect()
-                    
+                
                     try_batch_size = max(8, batch_size // 4)
-                    
+                
                     # Recreate with minimal trainable parameters
                     if model_strategy:
                         with model_strategy.scope():
                             new_model = tf.keras.Model.from_config(model_config)
-                            new_model.set_weights(weights)
-                            
+                new_model.set_weights(weights)
+                
                             # Only unfreeze classification layers
                             for layer in new_model.layers:
                                 layer.trainable = False
                             new_model.layers[-1].trainable = True  # Only final Dense layer
                             
                             # Simplified compilation
-                            new_model.compile(
+                new_model.compile(
                                 optimizer=tf.keras.optimizers.Adam(learning_rate=1e-6),
                                 loss='binary_crossentropy',
                                 metrics=['accuracy']
@@ -1195,11 +1195,11 @@ def fine_tune_model(
             ]
         else:
             metrics = [
-                'accuracy',
-                tf.keras.metrics.AUC(name='auc', from_logits=False),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
-            ]
+                        'accuracy',
+                        tf.keras.metrics.AUC(name='auc', from_logits=False),
+                        tf.keras.metrics.Precision(name='precision'),
+                        tf.keras.metrics.Recall(name='recall')
+                    ]
         
         # Compile the model with appropriate loss and metrics using the same strategy
         if model_strategy:
@@ -1222,27 +1222,27 @@ def fine_tune_model(
             try_batch_size = batch_size
             print(f"Fine-tuning with batch size of {try_batch_size}")
             
-            history = new_model.fit(
-                train_generator,
-                validation_data=val_generator,
-                epochs=epochs,
+                history = new_model.fit(
+                    train_generator,
+                    validation_data=val_generator,
+                    epochs=epochs,
                 callbacks=callbacks,  # Use the predefined callbacks
                 batch_size=try_batch_size,
                 class_weight=class_weights if not multi_label else None,
-                verbose=1
-            )
-            
+                    verbose=1
+                )
+                
             # Copy weights back to original model to maintain the reference
             model.set_weights(new_model.get_weights())
             
             # Clear up memory
             del new_model
-            gc.collect()
+        gc.collect()
+        
+        return history
             
-            return history
-            
-        except Exception as e:
-            print(f"Error during fine-tuning: {e}")
+    except Exception as e:
+        print(f"Error during fine-tuning: {e}")
             traceback.print_exc()
             
             # Try with smaller batch size
@@ -1261,7 +1261,7 @@ def fine_tune_model(
                         
                         # Unfreeze fewer layers to save memory
                         base_model = new_model.layers[1]
-                        base_model.trainable = False
+                base_model.trainable = False
                         for layer in base_model.layers[-15:]:  # Only 15 layers instead of 30
                             layer.trainable = True
                         
@@ -1292,24 +1292,24 @@ def fine_tune_model(
                 # Try with smaller batch
                 print(f"Fine-tuning with reduced batch size of {try_batch_size}")
                 history = new_model.fit(
-                    train_generator,
-                    validation_data=val_generator,
-                    epochs=epochs,
+                train_generator,
+                validation_data=val_generator,
+                epochs=epochs,
                     callbacks=callbacks,  # Use the predefined callbacks
                     batch_size=try_batch_size,
                     class_weight=class_weights if not multi_label else None,
-                    verbose=1
-                )
-                
+                verbose=1
+            )
+            
                 model.set_weights(new_model.get_weights())
                 del new_model
                 gc.collect()
-                return history
+            return history
                 
             except Exception as final_e:
                 print(f"Fine-tuning failed with all attempts: {final_e}")
                 traceback.print_exc()
-                return None
+            return None
 
 def setup_gpu(memory_limit=None, allow_growth=True):
     """
@@ -1340,7 +1340,7 @@ def setup_gpu(memory_limit=None, allow_growth=True):
         for gpu in gpus:
             if allow_growth:
                 try:
-                    tf.config.experimental.set_memory_growth(gpu, True)
+                tf.config.experimental.set_memory_growth(gpu, True)
                     print(f"Memory growth enabled for {gpu}")
                 except RuntimeError as e:
                     print(f"Error setting memory growth: {e}")
@@ -1348,10 +1348,10 @@ def setup_gpu(memory_limit=None, allow_growth=True):
             if memory_limit:
                 # Set memory limit in bytes
                 try:
-                    tf.config.set_logical_device_configuration(
-                        gpu,
-                        [tf.config.LogicalDeviceConfiguration(memory_limit=memory_limit * 1024 * 1024)]
-                    )
+                tf.config.set_logical_device_configuration(
+                    gpu,
+                    [tf.config.LogicalDeviceConfiguration(memory_limit=memory_limit * 1024 * 1024)]
+                )
                     print(f"Memory limit set to {memory_limit} MB for {gpu}")
                 except RuntimeError as e:
                     print(f"Error setting memory limit: {e}")
@@ -1359,10 +1359,10 @@ def setup_gpu(memory_limit=None, allow_growth=True):
                 # Default to using 16GB for a 24GB GPU to leave headroom
                 default_limit = 16384  # 16GB in MB
                 try:
-                    tf.config.set_logical_device_configuration(
-                        gpu,
-                        [tf.config.LogicalDeviceConfiguration(memory_limit=default_limit * 1024 * 1024)]
-                    )
+                tf.config.set_logical_device_configuration(
+                    gpu,
+                    [tf.config.LogicalDeviceConfiguration(memory_limit=default_limit * 1024 * 1024)]
+                )
                     print(f"Default memory limit set to {default_limit} MB for {gpu}")
                 except RuntimeError as e:
                     print(f"Error setting default memory limit: {e}")
@@ -1374,7 +1374,7 @@ def setup_gpu(memory_limit=None, allow_growth=True):
         
         # Enable mixed precision for better performance
         try:
-            tf.keras.mixed_precision.set_global_policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy('mixed_float16')
             print("Mixed precision enabled (float16)")
         except Exception as e:
             print(f"Error setting mixed precision: {e}")
@@ -1529,7 +1529,7 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
                 # Clean up
                 if os.path.exists(model_path):
                     try:
-                        os.remove(model_path)
+                    os.remove(model_path)
                     except:
                         pass
             except Exception as e:

@@ -88,7 +88,7 @@ def evaluate_model(model, val_generator, class_indices=None, save_path=None):
             y_true = np.concatenate(all_labels)
             if len(np.array(all_preds).shape) > 1 and np.array(all_preds).shape[1] > 1:
                 y_pred = np.concatenate([np.argmax(p, axis=1) for p in all_preds])
-            else:
+                else:
                 y_pred = np.concatenate(all_preds)
             y_pred_probs = np.vstack(all_pred_probs)
         
@@ -380,7 +380,7 @@ def evaluate_model(model, val_generator, class_indices=None, save_path=None):
                     axes[row, col].set_title(f'Confusion Matrix - {class_name}')
                     axes[row, col].set_ylabel('True Label')
                     axes[row, col].set_xlabel('Predicted Label')
-                else:
+        else:
                     # Hide unused subplots
                     axes[row, col].axis('off')
             
@@ -409,21 +409,21 @@ def evaluate_model(model, val_generator, class_indices=None, save_path=None):
                     )
             
             # Add diagonal line and labels
-            plt.plot([0, 1], [0, 1], 'k--', lw=2)
-            plt.xlim([0.0, 1.0])
-            plt.ylim([0.0, 1.05])
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            plt.title('Receiver Operating Characteristic (ROC) Curves')
-            plt.legend(loc="lower right")
-            
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic (ROC) Curves')
+    plt.legend(loc="lower right")
+    
             roc_filename = f"{save_path}/roc_curves_multilabel_{timestamp}.png"
             plt.savefig(roc_filename)
             print(f"ROC curves saved to {roc_filename}")
             
         else:
             # For single-label, plot a single confusion matrix
-            plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(10, 8))
             
             # Sort unique classes to ensure consistent ordering
             classes = sorted(list(set(np.concatenate([y_true, y_pred]))))

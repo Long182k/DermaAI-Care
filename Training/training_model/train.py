@@ -78,151 +78,163 @@ def main():
     
     args = parser.parse_args()
     
-    # Set random seeds for reproducibility
-    set_random_seeds(args.seed)
-    
-    # Configure GPU memory settings
-    print("Setting up GPU...")
-    tf_strategy = setup_gpu(memory_limit=args.memory_limit)
-    print(f"Using strategy: {tf_strategy}")
-    
-    # Make sure we clear any existing session before proceeding
-    tf.keras.backend.clear_session()
-    gc.collect()
-    
-    # Update model save path if provided
-    model_save_path = MODEL_SAVE_PATH
-    if args.model_save_path:
-        model_save_path = args.model_save_path
-        print(f"Custom model save path set: {model_save_path}")
-    
-    # Analyze dataset to get class weights and statistics
-    print("Analyzing dataset...")
-    dataset_stats = analyze_yolo_dataset(
-        args.csv_path,
-        args.image_dir,
-        args.labels_dir,
-        metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
-    )
-    
-    # Create data generators
-    print(f"Creating data generators for fold {args.fold_idx}...")
-    train_generator, val_generator, diagnosis_to_idx, n_classes, n_folds, class_weights = create_yolo_generators(
-        args.csv_path,
-        args.image_dir,
-        args.labels_dir,
-        batch_size=args.batch_size,
-        min_samples_per_class=args.min_samples,
-        n_folds=args.n_folds,
-        fold_idx=args.fold_idx,
-        seed=args.seed,
-        augmentation_strength=args.augmentation_strength,
-        metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
-    )
-    
-    # Build the model with multi-label output
-    print("Building model...")
-    model = build_peft_model(n_classes, multi_label=True)
-    
-    if model is None:
-        print("Failed to build model. Exiting.")
-        return
-    
-    # Print model summary
-    model.summary()
-    
-    # Train the model
-    print("Training model...")
     try:
-        history = train_model(
-            model,
-            train_generator,
-            val_generator,
-            args.epochs,
-            args.early_stopping,
-            args.reduce_lr,
-            class_weights,
-            args.learning_rate,
-            multi_label=True,
-            batch_size=args.batch_size
+        # Set random seeds for reproducibility
+        set_random_seeds(args.seed)
+        
+        # Configure GPU memory settings
+        print("Setting up GPU...")
+        tf_strategy = setup_gpu(memory_limit=args.memory_limit)
+        print(f"Using strategy: {tf_strategy}")
+        
+        # Make sure we clear any existing session before proceeding
+        tf.keras.backend.clear_session()
+        gc.collect()
+        
+        # Update model save path if provided
+        model_save_path = MODEL_SAVE_PATH
+        if args.model_save_path:
+            model_save_path = args.model_save_path
+            print(f"Custom model save path set: {model_save_path}")
+        
+        # Analyze dataset to get class weights and statistics
+        print("Analyzing dataset...")
+        dataset_stats = analyze_yolo_dataset(
+            args.csv_path,
+            args.image_dir,
+            args.labels_dir,
+            metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
         )
         
-        # Save the model
+        # Create data generators
+        print(f"Creating data generators for fold {args.fold_idx}...")
+        train_generator, val_generator, diagnosis_to_idx, n_classes, n_folds, class_weights = create_yolo_generators(
+            args.csv_path,
+            args.image_dir,
+            args.labels_dir,
+            batch_size=args.batch_size,
+            min_samples_per_class=args.min_samples,
+            n_folds=args.n_folds,
+            fold_idx=args.fold_idx,
+            seed=args.seed,
+            augmentation_strength=args.augmentation_strength,
+            metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
+        )
+        
+        # Build the model with multi-label output
+        print("Building model...")
+        model = build_peft_model(n_classes, multi_label=True)
+        
+        if model is None:
+            print("Failed to build model. Exiting.")
+            return
+        
+        # Print model summary
+        model.summary()
+        
+        # Train the model
+        print("Training model...")
         try:
-            model.save(model_save_path)
-            print(f"Model saved to {model_save_path}")
-        except Exception as save_error:
-            print(f"Error saving model: {save_error}")
-            traceback.print_exc()
-        
-        # Log initial model to MLflow
-        if args.log_to_mlflow:
+            history = train_model(
+                model,
+                train_generator,
+                val_generator,
+                args.epochs,
+                args.early_stopping,
+                args.reduce_lr,
+                class_weights,
+                args.learning_rate,
+                multi_label=True,
+                batch_size=args.batch_size
+            )
+            
+            # Save the model
             try:
-                log_model_to_mlflow(model, history, "skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
-            except Exception as mlflow_error:
-                print(f"Error logging to MLflow: {mlflow_error}")
-        
-        # Fine-tune if requested
-        if args.fine_tune:
-            print("Fine-tuning model...")
-            try:
-                fine_tune_history = fine_tune_model(
-                    model,
-                    train_generator,
-                    val_generator,
-                    args.fine_tune_epochs,
-                    args.early_stopping,
-                    multi_label=True,
-                    class_weights=class_weights,
-                    batch_size=args.batch_size
-                )
-                
-                history = fine_tune_history
-                
-                # Save the fine-tuned model
-                try:
-                    model.save(model_save_path.replace('.keras', '_fine_tuned.keras'))
-                    print(f"Fine-tuned model saved")
-                except Exception as save_error:
-                    print(f"Error saving fine-tuned model: {save_error}")
-                
-                if args.log_to_mlflow:
-                    try:
-                        log_model_to_mlflow(model, fine_tune_history, "fine_tuned_skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
-                    except Exception as mlflow_error:
-                        print(f"Error logging fine-tuned model to MLflow: {mlflow_error}")
-            except Exception as fine_tune_error:
-                print(f"Error during fine-tuning: {fine_tune_error}")
+                model.save(model_save_path)
+                print(f"Model saved to {model_save_path}")
+            except Exception as save_error:
+                print(f"Error saving model: {save_error}")
                 traceback.print_exc()
-        
-        # Evaluate model
-        print("\nEvaluating model...")
-        metrics = evaluate_model(
-            model=model,
-            test_generator=val_generator,
-            class_names=list(diagnosis_to_idx.keys()),
-            output_dir=os.path.join(args.model_save_path, "evaluation_results")
-        )
-        
-        if metrics:
-            print("\nEvaluation Metrics:")
-            print("-" * 55)
-            print(f"Validation Accuracy: {metrics.get('accuracy', 0):.4f}")
-            print(f"Validation Precision: {metrics.get('weighted_precision', 0):.4f}")
-            print(f"Validation Recall/Sensitivity: {metrics.get('weighted_recall', 0):.4f}")
-            print(f"Validation F1 Score: {metrics.get('weighted_f1', 0):.4f}")
-            print(f"Validation AUC: {metrics.get('weighted_auc', 0):.4f}")
-            print(f"Validation Specificity: {metrics.get('weighted_specificity', 0):.4f}")
-            print(f"Validation ICBHI Score: {metrics.get('weighted_icbhi_score', 0):.4f}")
-        
+            
+            # Log initial model to MLflow
+            if args.log_to_mlflow:
+                try:
+                    log_model_to_mlflow(model, history, "skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
+                except Exception as mlflow_error:
+                    print(f"Error logging to MLflow: {mlflow_error}")
+            
+            # Fine-tune if requested
+            if args.fine_tune:
+                print("Fine-tuning model...")
+                try:
+                    fine_tune_history = fine_tune_model(
+                        model,
+                        train_generator,
+                        val_generator,
+                        args.fine_tune_epochs,
+                        args.early_stopping,
+                        multi_label=True,
+                        class_weights=class_weights,
+                        batch_size=args.batch_size
+                    )
+                    
+                    history = fine_tune_history
+                    
+                    # Save the fine-tuned model
+                    try:
+                        model.save(model_save_path.replace('.keras', '_fine_tuned.keras'))
+                        print(f"Fine-tuned model saved")
+                    except Exception as save_error:
+                        print(f"Error saving fine-tuned model: {save_error}")
+                    
+                    if args.log_to_mlflow:
+                        try:
+                            log_model_to_mlflow(model, fine_tune_history, "fine_tuned_skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
+                        except Exception as mlflow_error:
+                            print(f"Error logging fine-tuned model to MLflow: {mlflow_error}")
+                except Exception as fine_tune_error:
+                    print(f"Error during fine-tuning: {fine_tune_error}")
+                    traceback.print_exc()
+            
+            # Evaluate model
+            print("\nEvaluating model...")
+            # Ensure evaluation directory exists
+            eval_dir = os.path.join(os.path.dirname(model_save_path), "evaluation_results")
+            os.makedirs(eval_dir, exist_ok=True)
+            
+            metrics = evaluate_model(
+                model=model,
+                test_generator=val_generator,
+                class_names=list(diagnosis_to_idx.keys()),
+                output_dir=eval_dir
+            )
+            
+            if metrics:
+                print("\nEvaluation Metrics:")
+                print("-" * 55)
+                print(f"Validation Accuracy: {metrics.get('accuracy', 0):.4f}")
+                print(f"Validation Precision: {metrics.get('weighted_precision', 0):.4f}")
+                print(f"Validation Recall/Sensitivity: {metrics.get('weighted_recall', 0):.4f}")
+                print(f"Validation F1 Score: {metrics.get('weighted_f1', 0):.4f}")
+                print(f"Validation AUC: {metrics.get('weighted_auc', 0):.4f}")
+                print(f"Validation Specificity: {metrics.get('weighted_specificity', 0):.4f}")
+                print(f"Validation ICBHI Score: {metrics.get('weighted_icbhi_score', 0):.4f}")
+                
+                # Print paths of saved files
+                if 'confusion_matrix_path' in metrics:
+                    print(f"\nConfusion matrix saved to: {metrics['confusion_matrix_path']}")
+                if 'report_path' in metrics:
+                    print(f"Classification report saved to: {metrics['report_path']}")
+            
+        except Exception as e:
+            print(f"Error during training: {e}")
+            traceback.print_exc()
+            return None
+            
     except Exception as e:
         print(f"Error in main training process: {str(e)}")
         traceback.print_exc()
         return None
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"Error in main: {str(e)}")
-        traceback.print_exc()
+    main()

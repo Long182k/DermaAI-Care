@@ -897,12 +897,6 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopp
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(policy)
         
-        # Set memory growth for GPUs
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-        
         # Unfreeze EfficientNet blocks progressively
         for layer in model.layers:
             if isinstance(layer, tf.keras.layers.BatchNormalization):
@@ -930,7 +924,7 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopp
                 verbose=1
             ),
             tf.keras.callbacks.ModelCheckpoint(
-                filepath=os.path.join(args.model_save_path, 'best_model.keras'),
+                filepath=os.path.join(args.model_save_path, 'best_model.h5'),
                 monitor='val_loss',
                 save_best_only=True,
                 verbose=1

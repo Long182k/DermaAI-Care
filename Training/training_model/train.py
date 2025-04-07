@@ -197,7 +197,55 @@ def main():
         # Evaluate the model
         print("Evaluating model...")
         try:
-            evaluate_model(model, val_generator, diagnosis_to_idx)
+            # Use the updated evaluate_model function with proper parameters
+            metrics = evaluate_model(
+                model, 
+                val_generator, 
+                class_indices=diagnosis_to_idx,
+                save_path="/kaggle/working/DermaAI-Care/Training/training_model/models"
+            )
+            
+            # Log evaluation metrics to MLflow if requested
+            if args.log_to_mlflow and metrics:
+                try:
+                    with mlflow.start_run(run_name=f"evaluation_fold_{args.fold_idx}"):
+                        # Log comprehensive metrics
+                        mlflow.log_metric("val_accuracy", metrics['accuracy'])
+                        mlflow.log_metric("val_precision", metrics['weighted_precision'])
+                        mlflow.log_metric("val_recall", metrics['weighted_recall'])
+                        mlflow.log_metric("val_f1", metrics['weighted_f1'])
+                        mlflow.log_metric("val_auc", metrics['weighted_auc'])
+                        mlflow.log_metric("val_specificity", metrics['weighted_specificity'])
+                        mlflow.log_metric("val_icbhi_score", metrics['weighted_icbhi_score'])
+                        
+                        # Log confusion matrix and ROC curve images
+                        for artifact_path in [
+                            f"/kaggle/working/DermaAI-Care/Training/training_model/models/confusion_matrix_*.png",
+                            f"/kaggle/working/DermaAI-Care/Training/training_model/models/roc_curves_*.png"
+                        ]:
+                            try:
+                                import glob
+                                for file_path in glob.glob(artifact_path):
+                                    mlflow.log_artifact(file_path)
+                            except Exception as artifact_error:
+                                print(f"Error logging artifact {artifact_path}: {artifact_error}")
+                except Exception as mlflow_error:
+                    print(f"Error logging metrics to MLflow: {mlflow_error}")
+                    traceback.print_exc()
+            
+            # Print final summary
+            if metrics:
+                print("\nFinal Model Evaluation Summary:")
+                print("=" * 60)
+                print(f"Validation Accuracy:         {metrics['accuracy']:.4f}")
+                print(f"Validation Precision:        {metrics['weighted_precision']:.4f}")
+                print(f"Validation Recall/Sensitivity: {metrics['weighted_recall']:.4f}")
+                print(f"Validation F1 Score:         {metrics['weighted_f1']:.4f}")
+                print(f"Validation AUC:              {metrics['weighted_auc']:.4f}")
+                print(f"Validation Specificity:      {metrics['weighted_specificity']:.4f}")
+                print(f"Validation ICBHI Score:      {metrics['weighted_icbhi_score']:.4f}")
+                print("=" * 60)
+            
         except Exception as eval_error:
             print(f"Error during evaluation: {eval_error}")
             traceback.print_exc()

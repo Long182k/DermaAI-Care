@@ -15,6 +15,7 @@ import os
 import time
 import gc
 import traceback
+import matplotlib.pyplot as plt
 
 # Import PEFT from Hugging Face
 try:
@@ -1431,19 +1432,101 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
             mlflow.log_param("num_classes", len(class_indices))
             mlflow.log_param("class_mapping", class_indices)
             
-            # Log metrics
-            for metric in ['accuracy', 'val_accuracy', 'loss', 'val_loss', 'auc', 'val_auc']:
-                if metric in history.history:
+            # Log metrics from training history
+            metrics_to_log = {
+                'accuracy': 'accuracy',
+                'val_accuracy': 'val_accuracy',
+                'loss': 'loss',
+                'val_loss': 'val_loss',
+                'auc': 'auc',
+                'val_auc': 'val_auc',
+                'precision': 'precision',
+                'val_precision': 'val_precision',
+                'recall': 'recall',
+                'val_recall': 'val_recall'
+            }
+            
+            # Log final and best metrics
+            for metric_name, history_key in metrics_to_log.items():
+                if history_key in history.history:
                     # Log the final value
-                    mlflow.log_metric(f"final_{metric}", history.history[metric][-1])
+                    final_value = history.history[history_key][-1]
+                    mlflow.log_metric(f"final_{metric_name}", final_value)
                     
                     # Log the best value
-                    if 'val' in metric:
-                        if 'loss' in metric:
-                            best_value = min(history.history[metric])
+                    if 'val_' in history_key:
+                        if 'loss' in history_key:
+                            best_value = min(history.history[history_key])
+                            best_epoch = history.history[history_key].index(best_value) + 1
+                            mlflow.log_metric(f"best_{metric_name}", best_value)
+                            mlflow.log_metric(f"best_{metric_name}_epoch", best_epoch)
                         else:
-                            best_value = max(history.history[metric])
-                        mlflow.log_metric(f"best_{metric}", best_value)
+                            best_value = max(history.history[history_key])
+                            best_epoch = history.history[history_key].index(best_value) + 1
+                            mlflow.log_metric(f"best_{metric_name}", best_value)
+                            mlflow.log_metric(f"best_{metric_name}_epoch", best_epoch)
+            
+            # Calculate and log ICBHI score if recall and specificity are available
+            if 'val_recall' in history.history and 'val_specificity' in history.history:
+                val_icbhi = [(r + s) / 2 for r, s in zip(history.history['val_recall'], history.history['val_specificity'])]
+                final_val_icbhi = val_icbhi[-1]
+                best_val_icbhi = max(val_icbhi)
+                best_val_icbhi_epoch = val_icbhi.index(best_val_icbhi) + 1
+                
+                mlflow.log_metric("final_val_icbhi_score", final_val_icbhi)
+                mlflow.log_metric("best_val_icbhi_score", best_val_icbhi)
+                mlflow.log_metric("best_val_icbhi_score_epoch", best_val_icbhi_epoch)
+                
+            # Log the training curves
+            try:
+                # Create a figure for the metrics
+                plt.figure(figsize=(12, 8))
+                
+                # Plot each available metric
+                metrics_to_plot = [
+                    ('loss', 'Loss'),
+                    ('accuracy', 'Accuracy'),
+                    ('precision', 'Precision'),
+                    ('recall', 'Recall/Sensitivity'),
+                    ('auc', 'AUC')
+                ]
+                
+                # Create subplots for each metric
+                fig, axs = plt.subplots(len(metrics_to_plot), 1, figsize=(10, 4*len(metrics_to_plot)))
+                
+                for i, (metric_key, metric_label) in enumerate(metrics_to_plot):
+                    # Check if metrics exist in history
+                    if metric_key in history.history:
+                        axs[i].plot(history.history[metric_key], label=f'Training {metric_label}')
+                        
+                        # Plot validation metrics if available
+                        val_key = f'val_{metric_key}'
+                        if val_key in history.history:
+                            axs[i].plot(history.history[val_key], label=f'Validation {metric_label}')
+                        
+                        axs[i].set_title(f'{metric_label} During Training')
+                        axs[i].set_xlabel('Epoch')
+                        axs[i].set_ylabel(metric_label)
+                        axs[i].legend()
+                        axs[i].grid(True)
+                
+                # Save the figure to a temporary file
+                metrics_plot_path = f"models/metrics_plot_{fold_idx}.png"
+                plt.tight_layout()
+                plt.savefig(metrics_plot_path)
+                plt.close()
+                
+                # Log the figure to MLflow
+                mlflow.log_artifact(metrics_plot_path)
+                
+                # Clean up
+                try:
+                    os.remove(metrics_plot_path)
+                except:
+                    pass
+                
+            except Exception as plot_error:
+                print(f"Error creating and logging plots: {plot_error}")
             
             # Log the model with signature and input example
             try:
@@ -1466,14 +1549,17 @@ def log_model_to_mlflow(model, history, model_name, fold_idx, class_indices):
                 )
                 
                 # Clean up
-                import shutil
                 if os.path.exists(model_path):
-                    os.remove(model_path)
+                    try:
+                        os.remove(model_path)
+                    except:
+                        pass
             except Exception as e:
                 print(f"Error logging model to MLflow: {e}")
     
     except Exception as e:
         print(f"Error in MLflow logging: {e}")
+        traceback.print_exc()
 
 
 def create_ensemble_model(num_classes, num_models=3):

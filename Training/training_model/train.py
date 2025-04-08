@@ -163,39 +163,30 @@ def main():
                 except Exception as mlflow_error:
                     print(f"Error logging to MLflow: {mlflow_error}")
             
-            # Fine-tune if requested
+            # Fine-tune the model if requested
             if args.fine_tune:
-                print("Fine-tuning model...")
-                try:
-                    fine_tune_history = fine_tune_model(
-                        model,
-                        train_generator,
-                        val_generator,
-                        args.fine_tune_epochs,
-                        args.early_stopping,
-                        multi_label=True,
-                        class_weights=class_weights,
-                        batch_size=args.batch_size,
-                        model_save_path=model_save_path
-                    )
-                    
-                    history = fine_tune_history
-                    
-                    # Save the fine-tuned model
-                    try:
-                        model.save(model_save_path.replace('.keras', '_fine_tuned.keras'))
-                        print(f"Fine-tuned model saved")
-                    except Exception as save_error:
-                        print(f"Error saving fine-tuned model: {save_error}")
-                    
-                    if args.log_to_mlflow:
-                        try:
-                            log_model_to_mlflow(model, fine_tune_history, "fine_tuned_skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
-                        except Exception as mlflow_error:
-                            print(f"Error logging fine-tuned model to MLflow: {mlflow_error}")
-                except Exception as fine_tune_error:
-                    print(f"Error during fine-tuning: {fine_tune_error}")
-                    traceback.print_exc()
+                print("\nFine-tuning model...")
+                fine_tune_history, fine_tuned_model = fine_tune_model(
+                    model,
+                    train_generator,
+                    val_generator,
+                    epochs=args.epochs,
+                    early_stopping_patience=args.early_stopping,
+                    multi_label=True,
+                    class_weights=class_weights,
+                    batch_size=args.batch_size,
+                    model_save_path=model_save_path
+                )
+                
+                if fine_tuned_model is not None:
+                    model = fine_tuned_model  # Use the fine-tuned model
+                    print("Fine-tuned model saved")
+                else:
+                    print("Fine-tuning failed, using original model")
+                
+                # Log fine-tuning metrics to MLflow
+                if fine_tune_history is not None:
+                    log_model_to_mlflow(model, fine_tune_history, "fine_tuned_model", 0, diagnosis_to_idx)
             
             # Evaluate model
             print("\nEvaluating model...")

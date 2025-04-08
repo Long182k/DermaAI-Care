@@ -5,14 +5,12 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     accuracy_score,
-    roc_auc_score as sk_roc_auc_score,
-    f1_score as sk_f1_score,
-    precision_score as sk_precision_score,
-    recall_score as sk_recall_score,
-    precision_recall_curve,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
     roc_curve,
-    auc,
-    average_precision_score
+    auc
 )
 import tensorflow as tf
 import os
@@ -25,39 +23,116 @@ import gc
 # Around line 16-20, keep the function signature
 def evaluate_model(model, test_generator, class_names, output_dir=None):
     """
-    Evaluate the model and generate comprehensive performance metrics
+    Evaluate the model and generate metrics, confusion matrix, and classification report.
     
     Args:
         model: Trained Keras model
-        test_generator: Test data generator
+        test_generator: Test data generator (YOLODetectionGenerator)
         class_names: List of class names
         output_dir: Directory to save evaluation results
-        
+    
     Returns:
         Dictionary containing evaluation metrics
     """
     try:
-        # Set default output directory if not provided
+        # Create output directory if not provided
         if output_dir is None:
-            output_dir = "/kaggle/working/DermaAI-Care/Training/training_model/models/"
-        
-        # Create output directory if it doesn't exist
+            output_dir = os.path.join(os.path.dirname(model_save_path), "evaluation_results")
         os.makedirs(output_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Get predictions
         print("Generating predictions...")
-        predictions = model.predict(test_generator)
         
-        # For multi-label classification
-        if isinstance(predictions, list) or (isinstance(predictions, np.ndarray) and len(predictions.shape) > 2):
-            return evaluate_multilabel(model, test_generator, predictions, class_names, output_dir, timestamp)
+        # Get predictions and true labels
+        y_pred = []
+        y_true = []
         
-        # For single-label classification
-        return evaluate_singlelabel(model, test_generator, predictions, class_names, output_dir, timestamp)
+        # Process batches
+        for i in range(len(test_generator)):
+            batch_data, batch_labels = test_generator[i]
+            batch_pred = model.predict(batch_data, verbose=0)
+            y_pred.extend(batch_pred)
+            y_true.extend(batch_labels)
+        
+        # Convert to numpy arrays
+        y_pred = np.array(y_pred)
+        y_true = np.array(y_true)
+        
+        # Convert predictions to class indices
+        if len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
+            y_pred_classes = np.argmax(y_pred, axis=1)
+        else:
+            y_pred_classes = (y_pred > 0.5).astype(int)
+        
+        # Convert true labels to class indices if they're one-hot encoded
+        if len(y_true.shape) > 1 and y_true.shape[1] > 1:
+            y_true_classes = np.argmax(y_true, axis=1)
+        else:
+            y_true_classes = y_true.astype(int)
+        
+        # Generate classification report
+        report = classification_report(
+            y_true_classes,
+            y_pred_classes,
+            target_names=class_names,
+            output_dict=True
+        )
+        
+        # Calculate additional metrics using scikit-learn functions
+        accuracy = accuracy_score(y_true_classes, y_pred_classes)
+        precision = precision_score(y_true_classes, y_pred_classes, average='weighted')
+        recall = recall_score(y_true_classes, y_pred_classes, average='weighted')
+        f1 = f1_score(y_true_classes, y_pred_classes, average='weighted')
+        
+        # Calculate AUC if it's a binary classification
+        if len(class_names) == 2:
+            auc_score = roc_auc_score(y_true_classes, y_pred[:, 1])
+        else:
+            auc_score = roc_auc_score(y_true_classes, y_pred, multi_class='ovr')
+        
+        # Calculate specificity
+        tn, fp, fn, tp = confusion_matrix(y_true_classes, y_pred_classes).ravel()
+        specificity = tn / (tn + fp)
+        
+        # Calculate ICBHI score (average of sensitivity and specificity)
+        icbhi_score = (recall + specificity) / 2
+        
+        # Save classification report
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = os.path.join(output_dir, f"classification_report_{timestamp}.csv")
+        pd.DataFrame(report).to_csv(report_path)
+        print(f"Classification report saved to: {report_path}")
+        
+        # Generate and save confusion matrix
+        cm_path = os.path.join(output_dir, f"confusion_matrix_{timestamp}.png")
+        plot_confusion_matrix(y_true_classes, y_pred_classes, class_names, output_dir)
+        print(f"Confusion matrix saved to: {cm_path}")
+        
+        # Print metrics
+        print("\nEvaluation Metrics:")
+        print("-" * 55)
+        print(f"Validation Accuracy: {accuracy:.4f}")
+        print(f"Validation Precision: {precision:.4f}")
+        print(f"Validation Recall/Sensitivity: {recall:.4f}")
+        print(f"Validation F1 Score: {f1:.4f}")
+        print(f"Validation AUC: {auc_score:.4f}")
+        print(f"Validation Specificity: {specificity:.4f}")
+        print(f"Validation ICBHI Score: {icbhi_score:.4f}")
+        
+        return {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'auc': auc_score,
+            'specificity': specificity,
+            'icbhi_score': icbhi_score,
+            'confusion_matrix_path': cm_path,
+            'report_path': report_path
+        }
         
     except Exception as e:
         print(f"Error during evaluation: {e}")
+        traceback.print_exc()
         return None
 
 def evaluate_multilabel(model, test_generator, predictions, class_names, output_dir, timestamp):
@@ -220,36 +295,6 @@ def save_model(model, save_path):
         print(f"Model successfully saved to {save_path}")
     except Exception as e:
         print(f"Error saving model: {e}")
-
-# Helper functions for multi-label metrics
-def precision_score(y_true, y_pred):
-    """Calculate precision for binary predictions"""
-    true_positives = np.sum(np.logical_and(y_pred == 1, y_true == 1))
-    predicted_positives = np.sum(y_pred == 1)
-    return true_positives / predicted_positives if predicted_positives > 0 else 0.0
-
-def recall_score(y_true, y_pred):
-    """Calculate recall for binary predictions"""
-    true_positives = np.sum(np.logical_and(y_pred == 1, y_true == 1))
-    actual_positives = np.sum(y_true == 1)
-    return true_positives / actual_positives if actual_positives > 0 else 0.0
-
-def f1_score(y_true, y_pred):
-    """Calculate F1 score for binary predictions"""
-    precision = precision_score(y_true, y_pred)
-    recall = recall_score(y_true, y_pred)
-    return 2 * ((precision * recall) / (precision + recall)) if (precision + recall) > 0 else 0.0
-
-def roc_auc_score(y_true, y_score):
-    """Calculate ROC AUC score"""
-    try:
-        if np.sum(y_true) == 0 or np.sum(y_true) == len(y_true):
-            # If all samples are of the same class, ROC AUC is undefined
-            return 0.5
-        fpr, tpr, _ = roc_curve(y_true, y_score)
-        return auc(fpr, tpr)
-    except:
-        return 0.5
 
 def plot_confusion_matrix(y_true, y_pred, class_names, output_dir):
     """

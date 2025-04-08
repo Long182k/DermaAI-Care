@@ -895,84 +895,97 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopp
         History object containing training metrics
     """
     try:
+        # Clear any existing session
+        tf.keras.backend.clear_session()
+        
         # Set up mixed precision training
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(policy)
         
-        # Unfreeze more layers for fine-tuning
-        for layer in model.layers:
-            if isinstance(layer, tf.keras.layers.BatchNormalization):
-                layer.trainable = True  # Keep BatchNormalization layers trainable
-            elif 'efficientnet' in layer.name:
-                # Unfreeze the last two blocks of EfficientNet
-                if any(block in layer.name for block in ['block6', 'block7']):
-                    layer.trainable = True
+        # Get the current strategy
+        current_strategy = tf.distribute.get_strategy()
+        
+        # Create a new model with the same architecture but under the current strategy
+        with current_strategy.scope():
+            # Create a new model with the same architecture
+            new_model = tf.keras.models.clone_model(model)
+            new_model.set_weights(model.get_weights())
+            
+            # Unfreeze more layers for fine-tuning
+            for layer in new_model.layers:
+                if isinstance(layer, tf.keras.layers.BatchNormalization):
+                    layer.trainable = True  # Keep BatchNormalization layers trainable
+                elif 'efficientnet' in layer.name:
+                    # Unfreeze the last two blocks of EfficientNet
+                    if any(block in layer.name for block in ['block6', 'block7']):
+                        layer.trainable = True
+                    else:
+                        layer.trainable = False
                 else:
-                    layer.trainable = False
-            else:
-                layer.trainable = True
-        
-        # Define callbacks
-        callbacks = [
-            tf.keras.callbacks.EarlyStopping(
-                monitor='val_loss',
-                patience=early_stopping_patience,
-                restore_best_weights=True
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.1,
-                patience=early_stopping_patience // 2,
-                min_lr=1e-7
-            )
-        ]
-        
-        # Add model checkpoint if save path is provided
-        if model_save_path:
-            os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-            callbacks.append(
-                tf.keras.callbacks.ModelCheckpoint(
-                    filepath=os.path.join(os.path.dirname(model_save_path), 'best_model.keras'),
+                    layer.trainable = True
+            
+            # Define callbacks
+            callbacks = [
+                tf.keras.callbacks.EarlyStopping(
                     monitor='val_loss',
-                    save_best_only=True,
-                    save_weights_only=False
+                    patience=early_stopping_patience,
+                    restore_best_weights=True
+                ),
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor='val_loss',
+                    factor=0.1,
+                    patience=early_stopping_patience // 2,
+                    min_lr=1e-7
                 )
-            )
-        
-        # Define loss function based on multi-label setting
-        if multi_label:
-            loss_fn = tf.keras.losses.BinaryCrossentropy()
-        else:
-            loss_fn = tf.keras.losses.CategoricalCrossentropy()
-        
-        # Compile model with smaller learning rate
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-            loss=loss_fn,
-            metrics=[
-                'accuracy',
-                tf.keras.metrics.AUC(),
-                tf.keras.metrics.Precision(),
-                tf.keras.metrics.Recall()
             ]
-        )
-        
-        # Train the model
-        history = model.fit(
-            train_generator,
-            validation_data=val_generator,
-            epochs=epochs,
-            callbacks=callbacks,
-            class_weight=class_weights,
-            batch_size=batch_size
-        )
-        
-        return history
+            
+            # Add model checkpoint if save path is provided
+            if model_save_path:
+                os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+                checkpoint_path = os.path.join(os.path.dirname(model_save_path), 'best_model.keras')
+                callbacks.append(
+                    tf.keras.callbacks.ModelCheckpoint(
+                        filepath=checkpoint_path,
+                        monitor='val_loss',
+                        save_best_only=True,
+                        save_weights_only=False
+                    )
+                )
+            
+            # Define loss function based on multi-label setting
+            if multi_label:
+                loss_fn = tf.keras.losses.BinaryCrossentropy()
+            else:
+                loss_fn = tf.keras.losses.CategoricalCrossentropy()
+            
+            # Compile model with smaller learning rate
+            new_model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+                loss=loss_fn,
+                metrics=[
+                    'accuracy',
+                    tf.keras.metrics.AUC(),
+                    tf.keras.metrics.Precision(),
+                    tf.keras.metrics.Recall()
+                ]
+            )
+            
+            # Train the model
+            history = new_model.fit(
+                train_generator,
+                validation_data=val_generator,
+                epochs=epochs,
+                callbacks=callbacks,
+                class_weight=class_weights,
+                batch_size=batch_size
+            )
+            
+            return history, new_model
         
     except Exception as e:
         print(f"Error during fine-tuning: {e}")
         traceback.print_exc()
-        return None
+        return None, None
 
 def setup_gpu(memory_limit=None, allow_growth=True):
     """

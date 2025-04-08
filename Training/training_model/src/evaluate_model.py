@@ -117,7 +117,8 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
                 y_pred_classes,
                 labels=used_class_indices,
                 target_names=used_class_names,
-                output_dict=True
+                output_dict=True,
+                zero_division=0  # Handle zero division explicitly
             )
         except ValueError as e:
             print(f"Error with classification report: {e}")
@@ -126,7 +127,8 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
                 y_true_classes,
                 y_pred_classes,
                 labels=used_class_indices,
-                output_dict=True
+                output_dict=True,
+                zero_division=0  # Handle zero division explicitly
             )
             
             # Add class names manually
@@ -144,6 +146,45 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
                     new_report[key] = report[key]
             
             report = new_report
+        
+        # Add debugging information to understand what the model is predicting
+        print("\nPrediction Distribution Analysis:")
+        print("-" * 50)
+        
+        # Count predictions per class
+        pred_counts = np.bincount(y_pred_classes, minlength=len(used_class_names))
+        print("Predictions per class:")
+        for i, count in enumerate(pred_counts):
+            if i < len(used_class_names):
+                class_name = used_class_names[i]
+                total = np.sum(y_true_classes == i)
+                print(f"  Class {i} ({class_name}): {count} predictions out of {total} samples ({count/max(1, total)*100:.2f}%)")
+        
+        # Print raw prediction distribution
+        print("\nPrediction confidence distribution:")
+        if len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
+            # For multi-class, show average confidence per class
+            mean_confidences = np.mean(y_pred, axis=0)
+            max_confidences = np.max(y_pred, axis=0)
+            
+            for i, (mean_conf, max_conf) in enumerate(zip(mean_confidences, max_confidences)):
+                if i < len(used_class_names):
+                    class_name = used_class_names[i]
+                    print(f"  Class {i} ({class_name}): Avg confidence: {mean_conf:.4f}, Max confidence: {max_conf:.4f}")
+                    
+            # Show histogram of highest confidence predictions
+            top_class_indices = np.argmax(y_pred, axis=1)
+            top_class_confidences = np.max(y_pred, axis=1)
+            
+            print("\nDistribution of highest confidence predictions:")
+            for i, class_name in enumerate(used_class_names):
+                class_mask = top_class_indices == i
+                count = np.sum(class_mask)
+                if count > 0:
+                    avg_conf = np.mean(top_class_confidences[class_mask])
+                    print(f"  Class {i} ({class_name}): {count} samples with avg confidence {avg_conf:.4f}")
+                else:
+                    print(f"  Class {i} ({class_name}): 0 samples")
         
         # Print classification report in a tabular format
         print("\nClassification Report:")

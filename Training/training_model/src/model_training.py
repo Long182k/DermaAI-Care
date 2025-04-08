@@ -45,8 +45,7 @@ except ImportError:
         PEFT_AVAILABLE = False
 
 # Define strategy at module level so it can be imported
-# Use CPU strategy by default, will be updated in setup_gpu
-strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
+strategy = tf.distribute.get_strategy()
 
 # Custom LoRA layer for TensorFlow
 class LoRALayer(tf.keras.layers.Layer):
@@ -125,93 +124,172 @@ def focal_loss(gamma=2.0, alpha=0.25):
 # Modify the model compilation in build_peft_model function
 def build_peft_model(num_classes, multi_label=False):
     """
-    Build a PEFT (Parameter-Efficient Fine-Tuning) model based on EfficientNetB0
+    Build a model for Parameter-Efficient Fine-Tuning (PEFT)
     
     Args:
-        num_classes: Number of output classes (must be a positive integer)
-        multi_label: Whether to use multi-label classification (sigmoid activation)
+        num_classes: Number of classes to predict
+        multi_label: Whether to use multi-label classification
     
     Returns:
-        Compiled Keras model
+        A compiled Keras model
     """
     try:
-        # Validate num_classes
-        if not isinstance(num_classes, int) or num_classes <= 0:
+        if num_classes is None or num_classes <= 0:
             raise ValueError(f"num_classes must be a positive integer, got {num_classes}")
         
-        # Clear any existing session
-        tf.keras.backend.clear_session()
-        
-        # Set data format to channels_last (NHWC) explicitly
+        # Set image data format explicitly
         tf.keras.backend.set_image_data_format('channels_last')
         
-        # Memory optimization
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            # Don't pre-allocate memory; allocate as-needed
-            try:
-                tf.config.experimental.set_memory_growth(gpus[0], True)
-            except:
-                # Memory growth must be set before GPUs have been initialized
-                print("Memory growth already set")
+        # Clear any existing sessions and cache
+        tf.keras.backend.clear_session()
+        gc.collect()
         
-        # Create base model with proper configuration and weights
-        input_shape = (224, 224, 3)
+        # Get the current strategy without relying on global variable
+        # This avoids issues with strategy stack management
+        try:
+            current_strategy = tf.distribute.get_strategy()
+        except ValueError:
+            # If no strategy is set, create a default one
+            print("No active strategy found. Creating a default strategy.")
+            if len(tf.config.list_physical_devices('GPU')) > 0:
+                current_strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
+            else:
+                current_strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
+                
+        print(f"Building model with strategy: {current_strategy.__class__.__name__}")
+        
+        # Create the model with the appropriate strategy
+        # The strategy scope is already properly handled by TensorFlow
         base_model = tf.keras.applications.EfficientNetB0(
             include_top=False,
             weights='imagenet',
-            input_shape=input_shape,
-            pooling='avg'
+            input_shape=(224, 224, 3),
+            pooling=None  # Don't use pooling here, we'll add it manually
         )
         
-        # Freeze the base model
+        # Freeze base model
         base_model.trainable = False
         
-        # Build the model using Functional API
-        inputs = tf.keras.layers.Input(shape=input_shape, name='input_layer')
+        # Print class distribution
+        print(f"Creating model for {num_classes} classes")
+        print(f"Multi-label classification: {multi_label}")
         
-        # Explicitly apply preprocessing to ensure format consistency
+        # Create the model using functional API
+        inputs = tf.keras.layers.Input(shape=(224, 224, 3))
+        
+        # Apply pre-processing (with normalization)
         x = tf.keras.applications.efficientnet.preprocess_input(inputs)
         
-        # Pass through the base model
+        # Get base model features
         x = base_model(x, training=False)
         
-        # Add classification head with proper shape
+        # Add global pooling with attention mechanism to prevent spatial bias
+        # This helps prevent the model from focusing on specific regions
+        attention = tf.keras.layers.Conv2D(1, kernel_size=1)(x)
+        attention = tf.keras.layers.Activation('sigmoid')(attention)
+        attention = tf.keras.layers.Multiply()([x, attention])
+        x = tf.keras.layers.GlobalAveragePooling2D()(attention)
+        
+        # Use strong regularization to prevent overfitting to one class
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dense(
+            512, 
+            activation='relu',
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42),
+            kernel_regularizer=tf.keras.regularizers.l2(0.001),
+            bias_initializer='zeros'
+        )(x)
         x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.Dropout(0.5)(x)
-        x = tf.keras.layers.Dense(512, activation='relu')(x)
-        x = tf.keras.layers.Dropout(0.3)(x)
         
-        # Use sigmoid for multi-label, softmax for single-label
-        activation = 'sigmoid' if multi_label else 'softmax'
-        outputs = tf.keras.layers.Dense(num_classes, activation=activation, name='output')(x)
+        # Add another layer with smaller size
+        x = tf.keras.layers.Dense(
+            256, 
+            activation='relu',
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=43),
+            kernel_regularizer=tf.keras.regularizers.l2(0.001),
+            bias_initializer='zeros'
+        )(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dropout(0.4)(x)
         
-        model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        # Add a class-balanced final layer with careful weight initialization
+        # Essential for preventing bias toward any specific class
+        if multi_label:
+            # For multi-label, use sigmoid activation
+            outputs = tf.keras.layers.Dense(
+                num_classes, 
+                activation='sigmoid',
+                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=44),
+                bias_initializer='zeros',  # Very important: start with no bias
+                kernel_regularizer=tf.keras.regularizers.l2(0.0001)
+            )(x)
+        else:
+            # For single-label, use softmax activation with careful initialization
+            # The key to preventing class bias is the bias initializer
+            # We explicitly set all biases to zero initially
+            outputs = tf.keras.layers.Dense(
+                num_classes, 
+                activation='softmax',
+                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=44),
+                bias_initializer='zeros',  # Critical for class balance
+                kernel_regularizer=tf.keras.regularizers.l2(0.0001)
+            )(x)
         
-        # Use mixed precision for better performance
-        policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_policy(policy)
+        # Create model
+        model = tf.keras.Model(inputs=inputs, outputs=outputs, name="EfficientNet_SkinLesion")
+        
+        # Define optimizer with gradient clipping to prevent extreme updates
+        optimizer = tf.keras.optimizers.Adam(
+            learning_rate=0.0001,  # Conservative learning rate
+            clipnorm=1.0,  # Gradient clipping
+            epsilon=1e-7    # For numerical stability
+        )
         
         # Define metrics
-        metrics = [
-            tf.keras.metrics.AUC(multi_label=multi_label, name='auc'),
-            tf.keras.metrics.Precision(name='precision'),
-            tf.keras.metrics.Recall(name='recall')
-        ]
-        
         if multi_label:
-            metrics.append(tf.keras.metrics.BinaryAccuracy(name='accuracy'))
-            loss = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+            metrics = [
+                tf.keras.metrics.BinaryAccuracy(name='accuracy', threshold=0.5),
+                tf.keras.metrics.AUC(name='auc', multi_label=True),
+                tf.keras.metrics.Precision(name='precision', thresholds=0.5),
+                tf.keras.metrics.Recall(name='recall', thresholds=0.5)
+            ]
+            
+            # Binary cross-entropy with label smoothing
+            loss = tf.keras.losses.BinaryCrossentropy(
+                from_logits=False,
+                label_smoothing=0.1  # Prevent overconfidence
+            )
         else:
-            metrics.append(tf.keras.metrics.CategoricalAccuracy(name='accuracy'))
-            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+            metrics = [
+                tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
+                tf.keras.metrics.AUC(name='auc', multi_label=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+            
+            # For single-label, use categorical crossentropy with focal loss characteristics
+            loss = tf.keras.losses.CategoricalCrossentropy(
+                from_logits=False,
+                label_smoothing=0.1  # Prevent overconfidence
+            )
         
-        # Compile the model with appropriate optimizer
+        # Compile model
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            optimizer=optimizer,
             loss=loss,
             metrics=metrics
         )
+        
+        # Print model summary
+        model.summary()
+        
+        # Print trainable parameters
+        trainable_count = np.sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])
+        non_trainable_count = np.sum([tf.keras.backend.count_params(w) for w in model.non_trainable_weights])
+        print(f"Total params: {trainable_count + non_trainable_count:,}")
+        print(f"Trainable params: {trainable_count:,}")
+        print(f"Non-trainable params: {non_trainable_count:,}")
         
         return model
         
@@ -379,217 +457,220 @@ class MemoryCleanupCallback(tf.keras.callbacks.Callback):
             except ImportError:
                 pass
 
-# Update the train_model function signature
-def train_model(
-    model, 
-    train_data, 
-    val_data, 
-    epochs, 
-    early_stopping_patience, 
-    reduce_lr_patience, 
-    class_weights=None,
-    learning_rate=0.0001,
-    multi_label=False,
-    batch_size=32
-):
+def setup_training_strategy():
     """
-    Train the model with proper callbacks and memory optimizations
+    Set up the training strategy for distributed training
+    
+    Returns:
+        A TensorFlow distribution strategy
+    """
+    # Clear TensorFlow's default graph to avoid strategy stack issues
+    tf.keras.backend.clear_session()
+    
+    # Check if GPUs are available
+    gpus = tf.config.list_physical_devices('GPU')
+    
+    if gpus:
+        # Use MirroredStrategy for multiple GPUs, OneDeviceStrategy for single GPU
+        if len(gpus) > 1:
+            # For multiple GPUs
+            print(f"Using MirroredStrategy for {len(gpus)} GPUs")
+            return tf.distribute.MirroredStrategy()
+        else:
+            # For single GPU
+            print(f"Using OneDeviceStrategy for a single GPU: {gpus[0].name}")
+            return tf.distribute.OneDeviceStrategy(device="/gpu:0")
+    else:
+        # For CPU only
+        print("No GPU found. Using CPU strategy.")
+        return tf.distribute.OneDeviceStrategy(device="/cpu:0")
+
+def train_model(model, train_generator, val_generator, epochs=50, batch_size=32, 
+                early_stopping_patience=10, reduce_lr_patience=5, 
+                callbacks=None, class_weights=None, model_save_path=None,
+                learning_rate=0.0001, multi_label=False):
+    """
+    Train the model using the specified strategy
     
     Args:
-        model: The compiled Keras model
-        train_data: Training data generator or dataset
-        val_data: Validation data generator or dataset
-        epochs: Number of epochs to train
-        early_stopping_patience: Number of epochs to wait before early stopping
-        reduce_lr_patience: Number of epochs to wait before reducing learning rate
-        class_weights: Dictionary of class weights for imbalanced datasets
-        learning_rate: Initial learning rate
-        multi_label: Whether this is a multi-label classification task
+        model: The compiled Keras model to train
+        train_generator: Training data generator
+        val_generator: Validation data generator
+        epochs: Number of epochs to train for
         batch_size: Batch size for training
+        early_stopping_patience: Patience for early stopping
+        reduce_lr_patience: Patience for learning rate reduction
+        callbacks: List of callbacks for training
+        class_weights: Dictionary of class weights for imbalanced data
+        model_save_path: Path to save the best model during training
+        learning_rate: Initial learning rate for training
+        multi_label: Whether this is a multi-label classification task
     """
-    print(f"Training with batch size: {batch_size}")
-    
-    # Use mixed precision for better performance
-    policy = tf.keras.mixed_precision.Policy('mixed_float16')
-    tf.keras.mixed_precision.set_global_policy(policy)
-    
-    # Define model checkpoint directory
-    model_dir = 'models'
-    os.makedirs(model_dir, exist_ok=True)
-    checkpoint_path = os.path.join(model_dir, 'checkpoint.keras')
-    
-    # Set up callbacks with better learning rate scheduling
-    monitor_metric = 'val_loss'
-    mode = 'min'
-    
-    callbacks = [
-        # Early stopping to prevent overfitting
-        tf.keras.callbacks.EarlyStopping(
-            monitor=monitor_metric,
-            patience=early_stopping_patience,
-            restore_best_weights=True,
-            mode=mode,
-            verbose=1
-        ),
-        # Reduce learning rate when training plateaus
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor=monitor_metric,
-            factor=0.2,
-            patience=reduce_lr_patience,
-            min_lr=1e-7,
-            mode=mode,
-            verbose=1
-        ),
-        # Save best model checkpoint
-        tf.keras.callbacks.ModelCheckpoint(
-            filepath=checkpoint_path,
-            monitor=monitor_metric,
-            save_best_only=True,
-            mode=mode,
-            verbose=1
-        ),
-        # Manage memory during training
-        MemoryCleanupCallback(cleanup_frequency=2),
-        # Stop training if it takes too long (4 hours)
-        TimeoutCallback(timeout_seconds=14400, checkpoint_path=checkpoint_path),
-        # Log training metrics
-        tf.keras.callbacks.CSVLogger(os.path.join(model_dir, 'training_log.csv'), append=True)
-    ]
-    
-    # Print information about GPU availability
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        print(f"Training on {len(gpus)} GPU(s): {gpus}")
-        # Try to set memory growth for better memory management
-        try:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            print("Memory growth enabled on all GPUs")
-        except:
-            print("Memory growth already set")
-    else:
-        print("Training on CPU")
-    
-    # Configure model for training if using eager execution
-    if tf.executing_eagerly():
-        # Compile with optimized settings
-        optimizer = tf.keras.optimizers.Adam(
-            learning_rate=learning_rate,
-            epsilon=1e-7,
-            amsgrad=True
-        )
-        
-        # Choose appropriate loss function
-        if multi_label:
-            loss = tf.keras.losses.BinaryCrossentropy(from_logits=False)
-            metrics = [
-                tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-                tf.keras.metrics.AUC(name='auc', multi_label=True),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
-            ]
-        else:
-            # Use categorical crossentropy for single-label classification
-            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
-            metrics = [
-                tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
-                tf.keras.metrics.AUC(name='auc'),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
-            ]
-        
-        # Compile model with updated settings
-        model.compile(
-            optimizer=optimizer,
-            loss=loss,
-            metrics=metrics
-        )
-    
-    # Calculate steps per epoch based on dataset size
-    if isinstance(train_data, tf.data.Dataset):
-        # For tf.data.Dataset, steps per epoch should be None (auto)
-        steps_per_epoch = None
-        validation_steps = None
-    else:
-        # For custom generators, ensure we have appropriate steps
-        steps_per_epoch = len(train_data)
-        validation_steps = len(val_data)
-    
-    # Train the model with error handling
     try:
-        # Perform memory cleanup before training
-        gc.collect()
+        print(f"Training with batch size: {batch_size}")
         
+        # Get the current strategy
+        try:
+            current_strategy = tf.distribute.get_strategy()
+        except ValueError:
+            # If no strategy is set, create a default one
+            print("No active strategy found. Creating a default strategy for training.")
+            if len(tf.config.list_physical_devices('GPU')) > 0:
+                current_strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
+            else:
+                current_strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
+        
+        # Create model checkpoint directory
+        if model_save_path:
+            model_dir = os.path.dirname(model_save_path)
+        else:
+            model_dir = 'models'
+        os.makedirs(model_dir, exist_ok=True)
+        checkpoint_path = os.path.join(model_dir, 'checkpoint.keras')
+        
+        # If callbacks weren't provided, create them
+        if callbacks is None:
+            # Set up callbacks with better learning rate scheduling
+            monitor_metric = 'val_loss'
+            mode = 'min'
+            
+            callbacks = [
+                # Early stopping to prevent overfitting
+                tf.keras.callbacks.EarlyStopping(
+                    monitor=monitor_metric,
+                    patience=early_stopping_patience,
+                    restore_best_weights=True,
+                    mode=mode,
+                    verbose=1
+                ),
+                # Reduce learning rate when training plateaus
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor=monitor_metric,
+                    factor=0.2,
+                    patience=reduce_lr_patience,
+                    min_lr=1e-7,
+                    mode=mode,
+                    verbose=1
+                ),
+                # Save best model checkpoint
+                tf.keras.callbacks.ModelCheckpoint(
+                    filepath=checkpoint_path,
+                    monitor=monitor_metric,
+                    save_best_only=True,
+                    mode=mode,
+                    verbose=1
+                ),
+                # Log training metrics
+                tf.keras.callbacks.CSVLogger(os.path.join(model_dir, 'training_log.csv'), append=True)
+            ]
+        
+        # Check if the model is already compiled
+        if not model.optimizer:
+            print("Model not compiled, compiling now...")
+            
+            # Choose appropriate loss function based on multi_label flag
+            if multi_label:
+                loss = tf.keras.losses.BinaryCrossentropy(from_logits=False, label_smoothing=0.1)
+                metrics = [
+                    tf.keras.metrics.BinaryAccuracy(name='accuracy', threshold=0.5),
+                    tf.keras.metrics.AUC(name='auc', multi_label=True),
+                    tf.keras.metrics.Precision(name='precision', thresholds=0.5),
+                    tf.keras.metrics.Recall(name='recall', thresholds=0.5)
+                ]
+            else:
+                loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False, label_smoothing=0.1)
+                metrics = [
+                    tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
+                    tf.keras.metrics.AUC(name='auc', multi_label=False),
+                    tf.keras.metrics.Precision(name='precision', thresholds=0.5),
+                    tf.keras.metrics.Recall(name='recall', thresholds=0.5)
+                ]
+            
+            # Use gradient clipping to prevent extreme updates
+            optimizer = tf.keras.optimizers.Adam(
+                learning_rate=learning_rate,
+                clipnorm=1.0,  # Gradient clipping
+                epsilon=1e-7
+            )
+            
+            model.compile(
+                optimizer=optimizer,
+                loss=loss,
+                metrics=metrics
+            )
+        
+        # Analyze prediction distribution before training to check for bias
+        print("\nPre-training prediction distribution check:")
+        _check_prediction_distribution(model, val_generator, multi_label)
+        
+        # Train the model
         history = model.fit(
-            train_data,
-            validation_data=val_data,
+            train_generator,
+            validation_data=val_generator,
             epochs=epochs,
             callbacks=callbacks,
             class_weight=class_weights,
-            batch_size=batch_size,
-            steps_per_epoch=steps_per_epoch,
-            validation_steps=validation_steps,
             verbose=1
         )
         
-        # Final cleanup after training
-        gc.collect()
+        # Analyze prediction distribution after training
+        print("\nPost-training prediction distribution check:")
+        _check_prediction_distribution(model, val_generator, multi_label)
         
         return history
-    
-    except tf.errors.ResourceExhaustedError as oom_error:
-        print(f"Out of memory error: {oom_error}")
-        print("Attempting to recover by reducing batch size...")
         
-        # Try again with reduced batch size
-        try:
-            reduced_batch = max(1, batch_size // 2)
-            print(f"Retrying with batch size: {reduced_batch}")
-            
-            # Clear existing state
-            tf.keras.backend.clear_session()
-            gc.collect()
-            
-            # Reload model from checkpoint if available
-            if os.path.exists(checkpoint_path):
-                print(f"Loading checkpoint from {checkpoint_path}")
-                model = tf.keras.models.load_model(checkpoint_path)
-            
-            # Train with reduced batch size
-            history = model.fit(
-                train_data,
-                validation_data=val_data,
-                epochs=epochs,
-                callbacks=callbacks,
-                class_weight=class_weights,
-                batch_size=reduced_batch,
-                steps_per_epoch=steps_per_epoch,
-                validation_steps=validation_steps,
-                verbose=1
-            )
-            
-            return history
+    except Exception as e:
+        print(f"Error during training: {str(e)}")
+        traceback.print_exc()
+        return None
+
+def _check_prediction_distribution(model, generator, multi_label=False):
+    """Helper function to check prediction distribution for debugging bias"""
+    try:
+        # Make predictions on a small batch
+        batch_x, batch_y = next(iter(generator))
+        preds = model.predict(batch_x, verbose=0)
         
-        except Exception as fallback_error:
-            print(f"Fallback training also failed: {fallback_error}")
-            traceback.print_exc()
-            
-            # Try to return partial training history if checkpoint exists
-            if os.path.exists(checkpoint_path):
-                print("Returning partial training results from checkpoint")
-                return None
-            
-            return None
+        # For one-hot encoded labels
+        if len(batch_y.shape) > 1 and batch_y.shape[1] > 1:
+            true_classes = np.argmax(batch_y, axis=1)
+            num_classes = batch_y.shape[1]
+        else:
+            true_classes = batch_y
+            num_classes = len(np.unique(true_classes))
+        
+        if multi_label:
+            # For multi-label, count predictions above threshold
+            pred_classes = (preds > 0.5).astype(int)
+            positive_preds = np.sum(pred_classes, axis=0)
+            print(f"Predictions per class (out of {len(batch_x)} samples):")
+            for i in range(num_classes):
+                print(f"  Class {i}: {positive_preds[i]} positive predictions")
+        else:
+            # For single-label, count argmax predictions
+            pred_classes = np.argmax(preds, axis=1)
+            class_counts = np.bincount(pred_classes, minlength=num_classes)
+            print(f"Predictions per class (out of {len(batch_x)} samples):")
+            for i in range(num_classes):
+                pct = 100 * class_counts[i] / len(batch_x)
+                print(f"  Class {i}: {class_counts[i]} predictions ({pct:.1f}%)")
+                
+        # Show prediction confidence
+        print("\nPrediction confidence:")
+        if multi_label:
+            avg_conf = np.mean(preds, axis=0)
+            for i in range(num_classes):
+                print(f"  Class {i}: {avg_conf[i]:.4f} average confidence")
+        else:
+            # For categorical, check confidence of the predicted class
+            max_conf = np.max(preds, axis=1)
+            avg_conf = np.mean(max_conf)
+            print(f"  Average confidence: {avg_conf:.4f}")
+            print(f"  Min confidence: {np.min(max_conf):.4f}")
+            print(f"  Max confidence: {np.max(max_conf):.4f}")
     
     except Exception as e:
-        print(f"Error during training: {e}")
-        traceback.print_exc()
-        
-        # Try to recover if a checkpoint was saved
-        if os.path.exists(checkpoint_path):
-            print(f"Training error occurred, but checkpoint was saved at: {checkpoint_path}")
-        
-        return None
+        print(f"Error checking prediction distribution: {e}")
 
 def create_balanced_data_generator(generator, batch_size=32):
     """
@@ -757,98 +838,195 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopp
         History object containing training metrics and the fine-tuned model
     """
     try:
-        # Clear any existing session
-        tf.keras.backend.clear_session()
+        # First, verify the base model's performance before fine-tuning
+        print("Evaluating base model performance before fine-tuning...")
+        base_eval = model.evaluate(val_generator, verbose=1)
+        base_metrics = dict(zip(model.metrics_names, base_eval))
         
-        # Set up mixed precision training
-        policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_policy(policy)
+        # Check prediction distribution before fine-tuning
+        print("\nPre-fine-tuning prediction distribution check:")
+        _check_prediction_distribution(model, val_generator, multi_label)
         
-        # Get the current strategy
-        current_strategy = tf.distribute.get_strategy()
+        if 'accuracy' in base_metrics and base_metrics['accuracy'] < 0.5:
+            print(f"WARNING: Base model accuracy ({base_metrics['accuracy']:.4f}) is too low for fine-tuning.")
+            print("Fine-tuning may not improve performance. Consider retraining with a different approach.")
         
-        # Create a new model with the same architecture but under the current strategy
-        with current_strategy.scope():
-            # Create a new model with the same architecture
-            new_model = tf.keras.models.clone_model(model)
-            new_model.set_weights(model.get_weights())
-            
-            # Unfreeze more layers for fine-tuning
-            for layer in new_model.layers:
-                if isinstance(layer, tf.keras.layers.BatchNormalization):
-                    layer.trainable = True  # Keep BatchNormalization layers trainable
-                elif 'efficientnet' in layer.name:
-                    # Unfreeze the last two blocks of EfficientNet
-                    if any(block in layer.name for block in ['block6', 'block7']):
-                        layer.trainable = True
-                    else:
-                        layer.trainable = False
-                else:
-                    layer.trainable = True
-            
-            # Define callbacks
-            callbacks = [
-                tf.keras.callbacks.EarlyStopping(
-                    monitor='val_loss',
-                    patience=early_stopping_patience,
-                    restore_best_weights=True
-                ),
-                tf.keras.callbacks.ReduceLROnPlateau(
-                    monitor='val_loss',
-                    factor=0.1,
-                    patience=early_stopping_patience // 2,
-                    min_lr=1e-7
-                )
-            ]
-            
-            # Add model checkpoint if save path is provided
-            if model_save_path:
-                os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-                # Ensure the checkpoint path uses .keras extension
-                checkpoint_path = os.path.join(os.path.dirname(model_save_path), 'best_model.keras')
-                callbacks.append(
-                    tf.keras.callbacks.ModelCheckpoint(
-                        filepath=checkpoint_path,
-                        monitor='val_loss',
-                        save_best_only=True,
-                        save_weights_only=False
-                    )
-                )
-            
-            # Define loss function based on multi-label setting
-            if multi_label:
-                loss_fn = tf.keras.losses.BinaryCrossentropy()
+        # Get the current distribution strategy - critical for consistency
+        try:
+            current_strategy = tf.distribute.get_strategy()
+        except ValueError:
+            # If no strategy is set, create a default one
+            print("No active strategy found. Creating a default strategy for fine-tuning.")
+            if len(tf.config.list_physical_devices('GPU')) > 0:
+                current_strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
             else:
-                loss_fn = tf.keras.losses.CategoricalCrossentropy()
+                current_strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
+                
+        print(f"Fine-tuning with strategy: {current_strategy.__class__.__name__}")
+        
+        # Make a clone of the model to avoid distributed strategy issues
+        fine_tuned_model = tf.keras.models.clone_model(model)
+        fine_tuned_model.set_weights(model.get_weights())
+        
+        print("Creating fine-tuning model by selectively unfreezing layers...")
+        
+        # Count total layers and determine which ones to unfreeze
+        total_layers = len([layer for layer in fine_tuned_model.layers if 'efficientnet' in layer.name])
+        
+        # Calculate how many layers to unfreeze (just the last 10%)
+        layers_to_unfreeze = max(1, int(total_layers * 0.1))
+        print(f"Model has {total_layers} EfficientNet layers. Unfreezing last {layers_to_unfreeze} layers.")
+        
+        # Keep track of layers to be fine-tuned
+        fine_tuned_layers = []
+        
+        # VERY IMPORTANT: Keep all BatchNormalization layers FROZEN during fine-tuning
+        # This prevents instability in the model
+        for layer in fine_tuned_model.layers:
+            # Start with everything frozen
+            layer.trainable = False
             
-            # Compile model with smaller learning rate
-            new_model.compile(
-                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                loss=loss_fn,
-                metrics=[
-                    'accuracy',
-                    tf.keras.metrics.AUC(),
-                    tf.keras.metrics.Precision(),
-                    tf.keras.metrics.Recall()
-                ]
+            # Special handling for BatchNormalization
+            if isinstance(layer, tf.keras.layers.BatchNormalization):
+                layer.trainable = False  # Keep frozen during fine-tuning
+            
+            # Unfreeze only the top dense layers - this is critical for class balance
+            elif isinstance(layer, tf.keras.layers.Dense):
+                # For dense layers, only unfreeze the ones before the final output layer
+                if layer != fine_tuned_model.layers[-1]:  # Not the output layer
+                    layer.trainable = True
+                    fine_tuned_layers.append(layer.name)
+        
+        print(f"Layers unfrozen for fine-tuning: {fine_tuned_layers}")
+        
+        # Define callbacks with more patience and careful monitoring
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=early_stopping_patience,
+                restore_best_weights=True,
+                min_delta=0.001  # Be more conservative about stopping
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.2,  # More gentle reduction
+                patience=early_stopping_patience // 2,
+                min_lr=1e-7,
+                verbose=1
+            ),
+            # Add a callback to monitor gradients and prevent extreme updates
+            tf.keras.callbacks.TerminateOnNaN()
+        ]
+        
+        # Add model checkpoint if save path is provided
+        if model_save_path:
+            os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+            # Ensure the checkpoint path uses .keras extension
+            checkpoint_path = os.path.join(os.path.dirname(model_save_path), 'best_model.keras')
+            callbacks.append(
+                tf.keras.callbacks.ModelCheckpoint(
+                    filepath=checkpoint_path,
+                    monitor='val_loss',
+                    save_best_only=True,
+                    save_weights_only=False,
+                    verbose=1
+                )
             )
-            
-            # Train the model
-            history = new_model.fit(
+        
+        # Define loss function based on multi-label setting - KEEP THE SAME AS ORIGINAL
+        if multi_label:
+            loss = tf.keras.losses.BinaryCrossentropy(label_smoothing=0.1)
+            metrics = [
+                tf.keras.metrics.BinaryAccuracy(name='accuracy', threshold=0.5),
+                tf.keras.metrics.AUC(name='auc', multi_label=True),
+                tf.keras.metrics.Precision(name='precision', thresholds=0.5),
+                tf.keras.metrics.Recall(name='recall', thresholds=0.5)
+            ]
+        else:
+            loss = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.1)
+            metrics = [
+                tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
+                tf.keras.metrics.AUC(name='auc', multi_label=False),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        
+        # Compile model with MUCH smaller learning rate for fine-tuning
+        # 10x-100x smaller than original learning rate
+        fine_tuned_model.compile(
+            optimizer=tf.keras.optimizers.Adam(
+                learning_rate=1e-5,  # Very small LR
+                clipnorm=1.0  # Add gradient clipping
+            ),
+            loss=loss,
+            metrics=metrics
+        )
+        
+        # Ensure class balance is preserved during fine-tuning by using the same weights
+        if class_weights is None:
+            print("WARNING: No class weights provided for fine-tuning. This may lead to class imbalance issues.")
+        else:
+            print(f"Using class weights for fine-tuning: {class_weights}")
+        
+        # Train with a smaller batch size for stability
+        fine_tune_batch_size = min(16, batch_size)  # Reduce batch size for stability
+        
+        try:
+            history = fine_tuned_model.fit(
                 train_generator,
                 validation_data=val_generator,
                 epochs=epochs,
                 callbacks=callbacks,
                 class_weight=class_weights,
-                batch_size=batch_size
+                batch_size=fine_tune_batch_size,
+                verbose=1
             )
-            
-            return history, new_model
+        except Exception as fit_error:
+            print(f"Error during fine-tuning fit: {fit_error}")
+            traceback.print_exc()
+            return None, model  # Return original model on error
+        
+        # Check prediction distribution after fine-tuning
+        print("\nPost-fine-tuning prediction distribution check:")
+        _check_prediction_distribution(fine_tuned_model, val_generator, multi_label)
+        
+        # After fine-tuning, evaluate again to make sure we didn't degrade performance
+        print("Evaluating model after fine-tuning...")
+        post_eval = fine_tuned_model.evaluate(val_generator, verbose=1)
+        post_metrics = dict(zip(fine_tuned_model.metrics_names, post_eval))
+        
+        # Compare before and after
+        print("\nPerformance comparison:")
+        print("-" * 50)
+        for metric in base_metrics:
+            if metric in post_metrics:
+                change = post_metrics[metric] - base_metrics[metric]
+                print(f"{metric}: {base_metrics[metric]:.4f} -> {post_metrics[metric]:.4f} (Change: {change:+.4f})")
+        
+        # If fine-tuning degraded performance significantly, revert to original model
+        if ('accuracy' in base_metrics and 'accuracy' in post_metrics and
+            post_metrics['accuracy'] < base_metrics['accuracy'] * 0.9):  # >10% worse
+            print("\nWARNING: Fine-tuning degraded model performance significantly.")
+            print("Reverting to original model...")
+            if model_save_path:
+                # Save the fine-tuned model with a different name anyway for analysis
+                fine_tuned_path = model_save_path.replace('.keras', '_fine_tuned_rejected.keras')
+                fine_tuned_model.save(fine_tuned_path)
+                print(f"Rejected fine-tuned model saved to {fine_tuned_path} for analysis")
+            return history, model  # Return original model
+        
+        # Save the fine-tuned model
+        if model_save_path:
+            fine_tuned_path = model_save_path.replace('.keras', '_fine_tuned.keras')
+            fine_tuned_model.save(fine_tuned_path)
+            print(f"Fine-tuned model saved to {fine_tuned_path}")
+        
+        return history, fine_tuned_model  # Return the fine-tuned model
         
     except Exception as e:
         print(f"Error during fine-tuning: {e}")
         traceback.print_exc()
-        return None, None
+        return None, model  # Return the original model in case of error
 
 def setup_gpu(memory_limit=None, allow_growth=True):
     """

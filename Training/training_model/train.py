@@ -11,7 +11,7 @@ import traceback
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
 from src.model_training import (
     build_peft_model, train_model, fine_tune_model, setup_gpu, 
-    log_model_to_mlflow, TimeoutCallback, TrainingResumer
+    log_model_to_mlflow, TimeoutCallback, TrainingResumer, setup_training_strategy
 )
 from src.evaluate_model import evaluate_model  # Make sure this import is correct
 
@@ -95,14 +95,13 @@ def main():
         # Set random seeds for reproducibility
         set_random_seeds(args.seed)
         
-        # Configure GPU memory settings
-        print("Setting up GPU...")
-        tf_strategy = setup_gpu(memory_limit=args.memory_limit, allow_growth=args.allow_growth)
-        print(f"Using strategy: {tf_strategy}")
-        
-        # Make sure we clear any existing session before proceeding
+        # Clear any existing session to avoid conflicts
         tf.keras.backend.clear_session()
         gc.collect()
+        
+        # Setup training strategy - do this only once
+        strategy = setup_training_strategy()
+        print(f"Using distribution strategy: {strategy.__class__.__name__}")
         
         # Update model save path if provided
         model_save_path = MODEL_SAVE_PATH
@@ -155,6 +154,7 @@ def main():
             
             # Build the model with multi-label output
             print("Building model...")
+            # Don't use nested strategy scopes - build_peft_model already uses strategy scope internally
             model = build_peft_model(n_classes, multi_label=args.multi_label)
             
             if model is None:
@@ -173,17 +173,20 @@ def main():
                     TimeoutCallback(timeout_seconds=timeout_seconds, checkpoint_path=CHECKPOINT_PATH)
                 ]
                 
+                # Use the updated train_model function with all required parameters
                 history = train_model(
-                    model,
-                    train_generator,
-                    val_generator,
-                    args.epochs,
-                    args.early_stopping,
-                    args.reduce_lr,
-                    class_weights,
-                    args.learning_rate,
+                    model=model,
+                    train_generator=train_generator,
+                    val_generator=val_generator,
+                    epochs=args.epochs,
+                    early_stopping_patience=args.early_stopping,
+                    reduce_lr_patience=args.reduce_lr,
+                    callbacks=callbacks,
+                    class_weights=class_weights,
+                    learning_rate=args.learning_rate,
                     multi_label=args.multi_label,
-                    batch_size=args.batch_size
+                    batch_size=args.batch_size,
+                    model_save_path=model_save_path
                 )
                 
                 # Save the model
@@ -192,7 +195,7 @@ def main():
                     print(f"Model saved to {model_save_path}")
                 except Exception as save_error:
                     print(f"Error saving model: {save_error}")
-                traceback.print_exc()
+                    traceback.print_exc()
                 
                 # Log initial model to MLflow
                 if args.log_to_mlflow:
@@ -218,10 +221,11 @@ def main():
         if args.fine_tune:
             print("Fine-tuning model...")
             try:
+                # Use the updated fine_tune_model function
                 fine_tune_history, fine_tuned_model = fine_tune_model(
-                    model,
-                    train_generator,
-                    val_generator,
+                    model=model,
+                    train_generator=train_generator,
+                    val_generator=val_generator,
                     epochs=args.fine_tune_epochs,
                     early_stopping_patience=args.early_stopping,
                     multi_label=args.multi_label,
@@ -233,13 +237,6 @@ def main():
                 if fine_tuned_model is not None:
                     model = fine_tuned_model  # Use the fine-tuned model
                     
-                    # Save the fine-tuned model
-                    try:
-                        model.save(model_save_path.replace('.keras', '_fine_tuned.keras'))
-                        print(f"Fine-tuned model saved")
-                    except Exception as save_error:
-                        print(f"Error saving fine-tuned model: {save_error}")
-                
                     if args.log_to_mlflow:
                         try:
                             log_model_to_mlflow(model, fine_tune_history, "fine_tuned_skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)

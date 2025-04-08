@@ -256,31 +256,6 @@ class MemoryCleanupCallback(tf.keras.callbacks.Callback):
             except ImportError:
                 pass
 
-# Analysis of Training and Evaluation Results
-
-# Based on the logs you've provided, your model is running without crashing, which is good news after the previous errors. However, there are some performance issues that need attention:
-
-## Current Status
-
-# 1. **Sample Mismatch Fixed**: The code successfully handled the mismatch between true labels (19) and predictions (16) by adjusting to 16 samples.
-
-# 2. **Class Imbalance**: Your dataset is imbalanced with 12 samples of class 0 and 4 samples of class 1.
-
-# 3. **Performance Issues**:
-#    - The model is predicting all samples as class 0 (majority class)
-#    - Precision, recall, and F1-score for class 1 are all 0.0
-#    - Overall accuracy is 75%, but this is misleading due to class imbalance
-
-# 4. **Warnings**: The sklearn warnings about "Precision and F-score are ill-defined" indicate that the model didn't predict any samples for class 1.
-
-## Recommendations
-
-# To improve your model's performance, I suggest the following modifications to your training approach:
-
-# In the train_model function, modify the class weights handling:
-
-# Modify the train_model function to better handle class imbalance
-
 # Update the train_model function signature
 def train_model(
     model, 

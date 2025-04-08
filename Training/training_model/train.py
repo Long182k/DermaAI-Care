@@ -34,13 +34,13 @@ def set_memory_growth():
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train skin lesion classification model')
-    parser.add_argument('--csv_path', type=str, default='/kaggle/input/2019-isic-csv/ISIC_2019_Training_GroundTruth.csv',
+    parser.add_argument('--csv_path', type=str, default='/kaggle/input/annotated-isic-2019-images/ISIC_2019_Training_GroundTruth.csv',
                         help='Path to CSV file with image metadata')
-    parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/2019-isic-csv/ISIC_2019_Training_Metadata.csv",
+    parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/annotated-isic-2019-images/ISIC_2019_Training_Metadata.csv",
                         help='Path to CSV file with patient metadata (age, sex, anatomical site)')
-    parser.add_argument('--image_dir', type=str, default='/kaggle/input/2019-isic/exp',
+    parser.add_argument('--image_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/exp/exp',
                         help='Directory containing detected images')
-    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/2019-isic/exp/labels',
+    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/labels/labels',
                         help='Directory containing YOLO label files')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for training')
@@ -170,7 +170,7 @@ def main():
                     model,
                     train_generator,
                     val_generator,
-                    epochs=args.epochs,
+                    epochs=args.fine_tune_epochs,
                     early_stopping_patience=args.early_stopping,
                     multi_label=True,
                     class_weights=class_weights,

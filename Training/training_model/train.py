@@ -9,7 +9,10 @@ import traceback
 
 # Import custom modules
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
-from src.model_training import build_peft_model, train_model, fine_tune_model, setup_gpu, log_model_to_mlflow
+from src.model_training import (
+    build_peft_model, train_model, fine_tune_model, setup_gpu, 
+    log_model_to_mlflow, TimeoutCallback, TrainingResumer
+)
 from src.evaluate_model import evaluate_model  # Make sure this import is correct
 
 # Define model save paths
@@ -75,6 +78,16 @@ def main():
                         help='Whether to use patient metadata (age, sex, anatomical site)')
     parser.add_argument('--model_save_path', type=str, default=None,
                         help='Path to save the trained model')
+    parser.add_argument('--mixed_precision', type=bool, default=False,
+                        help='Use mixed precision training')
+    parser.add_argument('--gradient_accumulation', type=int, default=1,
+                        help='Number of gradient accumulation steps')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume training from checkpoint')
+    parser.add_argument('--allow_growth', type=bool, default=True,
+                        help='Allow GPU memory growth')
+    parser.add_argument('--multi_label', action='store_true', default=True,
+                        help='Use multi-label classification')
     
     args = parser.parse_args()
     
@@ -84,7 +97,7 @@ def main():
         
         # Configure GPU memory settings
         print("Setting up GPU...")
-        tf_strategy = setup_gpu(memory_limit=args.memory_limit)
+        tf_strategy = setup_gpu(memory_limit=args.memory_limit, allow_growth=args.allow_growth)
         print(f"Using strategy: {tf_strategy}")
         
         # Make sure we clear any existing session before proceeding
@@ -97,82 +110,121 @@ def main():
             model_save_path = args.model_save_path
             print(f"Custom model save path set: {model_save_path}")
         
-        # Analyze dataset to get class weights and statistics
-        print("Analyzing dataset...")
-        dataset_stats = analyze_yolo_dataset(
-            args.csv_path,
-            args.image_dir,
-            args.labels_dir,
-            metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
-        )
+        # Create model save directory if it doesn't exist
+        os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
         
-        # Create data generators
-        print(f"Creating data generators for fold {args.fold_idx}...")
-        train_generator, val_generator, diagnosis_to_idx, n_classes, n_folds, class_weights = create_yolo_generators(
-            args.csv_path,
-            args.image_dir,
-            args.labels_dir,
-            batch_size=args.batch_size,
-            min_samples_per_class=args.min_samples,
-            n_folds=args.n_folds,
-            fold_idx=args.fold_idx,
-            seed=args.seed,
-            augmentation_strength=args.augmentation_strength,
-            metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
-        )
+        # Check for resume
+        resuming = False
+        initial_epoch = 0
         
-        # Build the model with multi-label output
-        print("Building model...")
-        model = build_peft_model(n_classes, multi_label=True)
+        if args.resume:
+            print(f"Checking for checkpoint at {CHECKPOINT_PATH}")
+            resumer = TrainingResumer(CHECKPOINT_PATH)
+            checkpoint_model = resumer.load_model()
+            if checkpoint_model is not None:
+                resuming = True
+                initial_epoch = resumer.get_initial_epoch()
+                model = checkpoint_model
+                print(f"Resuming training from epoch {initial_epoch}")
+                model = resumer.restore_optimizer_state(model)
         
-        if model is None:
-            print("Failed to build model. Exiting.")
-            return
+        if not resuming:
+            # Analyze dataset to get class weights and statistics
+            print("Analyzing dataset...")
+            dataset_stats = analyze_yolo_dataset(
+                args.csv_path,
+                args.image_dir,
+                args.labels_dir,
+                metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
+            )
         
-        # Print model summary
-        model.summary()
-        
-        # Train the model
-        print("Training model...")
-        try:
-            history = train_model(
-                model,
-                train_generator,
-                val_generator,
-                args.epochs,
-                args.early_stopping,
-                args.reduce_lr,
-                class_weights,
-                args.learning_rate,
-                multi_label=True,
-                batch_size=args.batch_size
+            # Create data generators
+            print(f"Creating data generators for fold {args.fold_idx}...")
+            train_generator, val_generator, diagnosis_to_idx, n_classes, n_folds, class_weights = create_yolo_generators(
+                args.csv_path,
+                args.image_dir,
+                args.labels_dir,
+                batch_size=args.batch_size,
+                min_samples_per_class=args.min_samples,
+                n_folds=args.n_folds,
+                fold_idx=args.fold_idx,
+                seed=args.seed,
+                augmentation_strength=args.augmentation_strength,
+                metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
             )
             
-            # Save the model
+            # Build the model with multi-label output
+            print("Building model...")
+            model = build_peft_model(n_classes, multi_label=args.multi_label)
+            
+            if model is None:
+                print("Failed to build model. Exiting.")
+                return
+            
+            # Print model summary
+            model.summary()
+            
+            # Train the model
+            print("Training model...")
             try:
-                model.save(model_save_path)
-                print(f"Model saved to {model_save_path}")
-            except Exception as save_error:
-                print(f"Error saving model: {save_error}")
-                traceback.print_exc()
-            
-            # Log initial model to MLflow
-            if args.log_to_mlflow:
+                # Configure timeout callback with increased time (4 hours)
+                timeout_seconds = 14400  # 4 hours
+                callbacks = [
+                    TimeoutCallback(timeout_seconds=timeout_seconds, checkpoint_path=CHECKPOINT_PATH)
+                ]
+                
+                history = train_model(
+                    model,
+                    train_generator,
+                    val_generator,
+                    args.epochs,
+                    args.early_stopping,
+                    args.reduce_lr,
+                    class_weights,
+                    args.learning_rate,
+                    multi_label=args.multi_label,
+                    batch_size=args.batch_size
+                )
+                
+                # Save the model
                 try:
-                    log_model_to_mlflow(model, history, "skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
-                except Exception as mlflow_error:
-                    print(f"Error logging to MLflow: {mlflow_error}")
+                    model.save(model_save_path)
+                    print(f"Model saved to {model_save_path}")
+                except Exception as save_error:
+                    print(f"Error saving model: {save_error}")
+                traceback.print_exc()
+                
+                # Log initial model to MLflow
+                if args.log_to_mlflow:
+                    try:
+                        log_model_to_mlflow(model, history, "skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
+                    except Exception as mlflow_error:
+                        print(f"Error logging to MLflow: {mlflow_error}")
             
-            # Fine-tune the model if requested
-            if args.fine_tune:
-                print("\nFine-tuning model...")
+            except Exception as e:
+                print(f"Error during training: {e}")
+                traceback.print_exc()
+                
+                # Try to load the checkpoint if available
+                if os.path.exists(CHECKPOINT_PATH):
+                    print(f"Loading checkpoint from {CHECKPOINT_PATH}")
+                    try:
+                        model = tf.keras.models.load_model(CHECKPOINT_PATH)
+                    except Exception as load_error:
+                        print(f"Error loading checkpoint: {load_error}")
+                        return
+        
+        # Fine-tune the model if requested
+        if args.fine_tune:
+            print("Fine-tuning model...")
+            try:
                 fine_tune_history, fine_tuned_model = fine_tune_model(
                     model,
                     train_generator,
                     val_generator,
                     epochs=args.fine_tune_epochs,
                     early_stopping_patience=args.early_stopping,
-                    multi_label=True,
+                    multi_label=args.multi_label,
                     class_weights=class_weights,
                     batch_size=args.batch_size,
                     model_save_path=model_save_path
@@ -180,24 +232,42 @@ def main():
                 
                 if fine_tuned_model is not None:
                     model = fine_tuned_model  # Use the fine-tuned model
-                    print("Fine-tuned model saved")
-                else:
-                    print("Fine-tuning failed, using original model")
+                    
+                    # Save the fine-tuned model
+                    try:
+                        model.save(model_save_path.replace('.keras', '_fine_tuned.keras'))
+                        print(f"Fine-tuned model saved")
+                    except Exception as save_error:
+                        print(f"Error saving fine-tuned model: {save_error}")
                 
-                # Log fine-tuning metrics to MLflow
-                if fine_tune_history is not None:
-                    log_model_to_mlflow(model, fine_tune_history, "fine_tuned_model", 0, diagnosis_to_idx)
-            
-            # Evaluate model
-            print("\nEvaluating model...")
+                    if args.log_to_mlflow:
+                        try:
+                            log_model_to_mlflow(model, fine_tune_history, "fine_tuned_skin_lesion_classifier", args.fold_idx, diagnosis_to_idx)
+                        except Exception as mlflow_error:
+                            print(f"Error logging fine-tuned model to MLflow: {mlflow_error}")
+            except Exception as fine_tune_error:
+                print(f"Error during fine-tuning: {fine_tune_error}")
+                traceback.print_exc()
+        
+        # Evaluate model
+        print("\nEvaluating model...")
+        try:
             # Ensure evaluation directory exists
             eval_dir = os.path.join(os.path.dirname(model_save_path), "evaluation_results")
             os.makedirs(eval_dir, exist_ok=True)
             
+            # Get the class names from the diagnosis_to_idx mapping
+            class_names = list(diagnosis_to_idx.keys())
+            
+            # Print class mapping for debug purposes
+            print("Class mapping for evaluation:")
+            for i, class_name in enumerate(class_names):
+                print(f"  {i}: {class_name}")
+            
             metrics = evaluate_model(
                 model=model,
                 test_generator=val_generator,
-                class_names=list(diagnosis_to_idx.keys()),
+                class_names=class_names,
                 output_dir=eval_dir
             )
             
@@ -219,9 +289,8 @@ def main():
                     print(f"Classification report saved to: {metrics['report_path']}")
             
         except Exception as e:
-            print(f"Error during training: {e}")
+            print(f"Error during evaluation: {e}")
             traceback.print_exc()
-            return None
             
     except Exception as e:
         print(f"Error in main training process: {str(e)}")

@@ -16,6 +16,7 @@ import time
 import gc
 import traceback
 import matplotlib.pyplot as plt
+import json
 
 # Import PEFT from Hugging Face
 try:
@@ -122,117 +123,239 @@ def focal_loss(gamma=2.0, alpha=0.25):
     return focal_loss_fixed
 
 # Modify the model compilation in build_peft_model function
-def build_peft_model(num_classes, r=8, alpha=32, multi_label=False):
+def build_peft_model(num_classes, multi_label=False):
     """
-    Build and compile the model with PEFT (LoRA) optimizations and memory efficiency
+    Build a PEFT (Parameter-Efficient Fine-Tuning) model based on EfficientNetB0
     
     Args:
-        num_classes: Number of output classes
-        r: Rank of the low-rank adaptation matrices
-        alpha: Scaling factor for the adaptation
+        num_classes: Number of output classes (must be a positive integer)
         multi_label: Whether to use multi-label classification (sigmoid activation)
+    
+    Returns:
+        Compiled Keras model
     """
-    print(f"Building model with {num_classes} classes, multi_label={multi_label}")
-    
-    # Clear any existing session to ensure consistent strategy
-    tf.keras.backend.clear_session()
-    
-    # Enable mixed precision for faster training and lower memory usage
-    original_policy = tf.keras.mixed_precision.global_policy()
-    set_global_policy('mixed_float16')
-    
     try:
-        # Use the global strategy defined at the module level
-        with strategy.scope():
-            # Create the base model with efficient memory usage
-            base_model = EfficientNetB0(
-                weights='imagenet',
-                include_top=False,
-                input_shape=(224, 224, 3),
-                pooling='avg'
-            )
-            
-            # Freeze the base model
-            base_model.trainable = False
-            
-            # Build the model using Functional API
-            inputs = Input(shape=(224, 224, 3))
-            x = base_model(inputs, training=False)
-            
-            # Add stronger regularization and dropout
-            x = tf.keras.layers.BatchNormalization()(x)
-            x = Dense(512, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.01))(x)
-            x = tf.keras.layers.BatchNormalization()(x)
-            x = Dropout(0.5)(x)
-            
-            # Add LoRA adaptation
-            lora_adaptation = LoRALayer(512, 512, r=r, alpha=alpha, name='lora_adaptation')(x)
-            
-            # Combine original dense output with LoRA adaptation
-            combined = tf.keras.layers.Add()([x, lora_adaptation])
-            combined = tf.keras.layers.BatchNormalization()(combined)
-            
-            # Add one more layer with strong regularization
-            x = Dense(256, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.01))(combined)
-            x = tf.keras.layers.BatchNormalization()(x)
-            x = Dropout(0.3)(x)
-            
-            # Use sigmoid activation for multi-label, softmax for single-label
-            final_activation = 'sigmoid' if multi_label else 'softmax'
-            outputs = Dense(num_classes, activation=final_activation,
-                           kernel_regularizer=tf.keras.regularizers.l2(0.01))(x)
-            
-            model = Model(inputs=inputs, outputs=outputs)
-            
-            # Choose appropriate loss and metrics based on the task
-            if multi_label:
-                loss = tf.keras.losses.BinaryCrossentropy()
-                metrics = [
-                    BinaryAccuracy(name='accuracy'),
-                    AUC(name='auc', multi_label=True),
-                    Precision(name='precision'),
-                    Recall(name='recall')
-                ]
-            else:
-                loss = focal_loss(gamma=2.0, alpha=0.25)
-                metrics = [
-                    'accuracy',
-                    AUC(name='auc', from_logits=False),
-                    Precision(name='precision'),
-                    Recall(name='recall')
-                ]
-            
-            # Compile with a lower learning rate
-            model.compile(
-                optimizer=tf.keras.optimizers.Adam(learning_rate=5e-5),
-                loss=loss,
-                metrics=metrics
-            )
-            
-            return model
-
+        # Validate num_classes
+        if not isinstance(num_classes, int) or num_classes <= 0:
+            raise ValueError(f"num_classes must be a positive integer, got {num_classes}")
+        
+        # Clear any existing session
+        tf.keras.backend.clear_session()
+        
+        # Set data format to channels_last (NHWC) explicitly
+        tf.keras.backend.set_image_data_format('channels_last')
+        
+        # Memory optimization
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            # Don't pre-allocate memory; allocate as-needed
+            try:
+                tf.config.experimental.set_memory_growth(gpus[0], True)
+            except:
+                # Memory growth must be set before GPUs have been initialized
+                print("Memory growth already set")
+        
+        # Create base model with proper configuration and weights
+        input_shape = (224, 224, 3)
+        base_model = tf.keras.applications.EfficientNetB0(
+            include_top=False,
+            weights='imagenet',
+            input_shape=input_shape,
+            pooling='avg'
+        )
+        
+        # Freeze the base model
+        base_model.trainable = False
+        
+        # Build the model using Functional API
+        inputs = tf.keras.layers.Input(shape=input_shape, name='input_layer')
+        
+        # Explicitly apply preprocessing to ensure format consistency
+        x = tf.keras.applications.efficientnet.preprocess_input(inputs)
+        
+        # Pass through the base model
+        x = base_model(x, training=False)
+        
+        # Add classification head with proper shape
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dropout(0.5)(x)
+        x = tf.keras.layers.Dense(512, activation='relu')(x)
+        x = tf.keras.layers.Dropout(0.3)(x)
+        
+        # Use sigmoid for multi-label, softmax for single-label
+        activation = 'sigmoid' if multi_label else 'softmax'
+        outputs = tf.keras.layers.Dense(num_classes, activation=activation, name='output')(x)
+        
+        model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        
+        # Use mixed precision for better performance
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+        
+        # Define metrics
+        metrics = [
+            tf.keras.metrics.AUC(multi_label=multi_label, name='auc'),
+            tf.keras.metrics.Precision(name='precision'),
+            tf.keras.metrics.Recall(name='recall')
+        ]
+        
+        if multi_label:
+            metrics.append(tf.keras.metrics.BinaryAccuracy(name='accuracy'))
+            loss = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+        else:
+            metrics.append(tf.keras.metrics.CategoricalAccuracy(name='accuracy'))
+            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+        
+        # Compile the model with appropriate optimizer
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss=loss,
+            metrics=metrics
+        )
+        
+        return model
+        
     except Exception as e:
         print(f"Error building model: {e}")
-        # Restore original policy on error
-        tf.keras.mixed_precision.set_global_policy(original_policy)
-        # Try with a simpler model on error
+        traceback.print_exc()
         return None
 
 # Custom callbacks for memory management and timeout protection
 class TimeoutCallback(tf.keras.callbacks.Callback):
-    def __init__(self, timeout_seconds=3600):  # Default timeout of 1 hour
+    """
+    Callback to stop training after a certain amount of time has passed.
+    
+    Args:
+        timeout_seconds: Number of seconds after which training will be stopped
+        checkpoint_path: Path to save the model before timeout
+    """
+    def __init__(self, timeout_seconds=12000, checkpoint_path=None):
         super(TimeoutCallback, self).__init__()
         self.timeout_seconds = timeout_seconds
-        self.start_time = None
-        
-    def on_train_begin(self, logs=None):
+        self.checkpoint_path = checkpoint_path
         self.start_time = time.time()
+        print(f"Training will timeout after {timeout_seconds/3600:.1f} hours")
         
+    def on_epoch_begin(self, epoch, logs=None):
+        # Reset timer at the beginning of each epoch
+        self.epoch_start_time = time.time()
+    
     def on_epoch_end(self, epoch, logs=None):
-        if time.time() - self.start_time > self.timeout_seconds:
-            print(f"\nStopping training due to timeout ({self.timeout_seconds} seconds)")
-            self.model.stop_training = True
+        # Check if we've exceeded the timeout
+        elapsed_time = time.time() - self.start_time
+        epoch_time = time.time() - self.epoch_start_time
+        
+        # Print time info
+        print(f"Epoch {epoch} took {epoch_time:.1f}s. Total elapsed time: {elapsed_time/60:.1f} min")
+        
+        # Save checkpoint if needed
+        if self.checkpoint_path and elapsed_time > 0.7 * self.timeout_seconds:
+            print(f"Saving checkpoint before potential timeout at {self.checkpoint_path}")
+            self.model.save(self.checkpoint_path)
             
+        if elapsed_time > self.timeout_seconds:
+            self.model.stop_training = True
+            print(f"\nStopping training due to timeout ({self.timeout_seconds} seconds).")
+            
+            # Save the final model state
+            if self.checkpoint_path:
+                print(f"Saving final model at {self.checkpoint_path}")
+                self.model.save(self.checkpoint_path)
+                
+                # Save training state for resumption
+                self.save_training_state(epoch, logs)
+    
+    def save_training_state(self, epoch, logs):
+        """Save the training state for later resumption"""
+        if not self.checkpoint_path:
+            return
+            
+        resume_info = {
+            'epoch': epoch + 1,  # Next epoch to resume from
+            'optimizer_config': self.model.optimizer.get_config(),
+            'last_logs': logs,
+            'elapsed_time': time.time() - self.start_time
+        }
+        
+        # Save as JSON next to the model
+        resume_path = os.path.join(os.path.dirname(self.checkpoint_path), 'resume_info.json')
+        with open(resume_path, 'w') as f:
+            # Convert numpy values to Python native types
+            logs_serializable = {}
+            for k, v in logs.items():
+                if isinstance(v, (np.float32, np.float64)):
+                    logs_serializable[k] = float(v)
+                elif isinstance(v, (np.int32, np.int64)):
+                    logs_serializable[k] = int(v)
+                else:
+                    logs_serializable[k] = v
+            
+            resume_info['last_logs'] = logs_serializable
+            json.dump(resume_info, f)
+        
+        print(f"Saved training state to {resume_path}")
+
+class TrainingResumer:
+    """
+    Helper class to resume training from a previous checkpoint
+    
+    Args:
+        model_path: Path to the saved model
+        resume_info_path: Path to the resume info JSON
+    """
+    def __init__(self, model_path, resume_info_path=None):
+        self.model_path = model_path
+        self.resume_info_path = resume_info_path or os.path.join(
+            os.path.dirname(model_path), 'resume_info.json')
+        self.resume_info = None
+        
+        if os.path.exists(self.resume_info_path):
+            try:
+                with open(self.resume_info_path, 'r') as f:
+                    self.resume_info = json.load(f)
+                print(f"Found resume information: starting from epoch {self.resume_info['epoch']}")
+            except Exception as e:
+                print(f"Error loading resume info: {e}")
+                self.resume_info = None
+    
+    def load_model(self):
+        """Load the model from checkpoint"""
+        if os.path.exists(self.model_path):
+            try:
+                model = tf.keras.models.load_model(self.model_path)
+                print(f"Loaded model from {self.model_path}")
+                return model
+            except Exception as e:
+                print(f"Error loading model: {e}")
+                return None
+        return None
+    
+    def get_initial_epoch(self):
+        """Get the epoch to resume from"""
+        if self.resume_info:
+            return self.resume_info.get('epoch', 0)
+        return 0
+    
+    def restore_optimizer_state(self, model):
+        """Restore optimizer state if available"""
+        if self.resume_info and 'optimizer_config' in self.resume_info:
+            try:
+                # Create a new optimizer with the saved config
+                optimizer_config = self.resume_info['optimizer_config']
+                optimizer_class = getattr(tf.keras.optimizers, optimizer_config['name'])
+                optimizer = optimizer_class.from_config(optimizer_config)
+                
+                # Compile the model with the restored optimizer
+                model.compile(
+                    optimizer=optimizer,
+                    loss=model.loss,
+                    metrics=model.metrics
+                )
+                print("Restored optimizer state")
+            except Exception as e:
+                print(f"Error restoring optimizer state: {e}")
+        return model
+
 class MemoryCleanupCallback(tf.keras.callbacks.Callback):
     def __init__(self, cleanup_frequency=5):
         super(MemoryCleanupCallback, self).__init__()
@@ -270,7 +393,7 @@ def train_model(
     batch_size=32
 ):
     """
-    Train the model with proper callbacks and monitoring
+    Train the model with proper callbacks and memory optimizations
     
     Args:
         model: The compiled Keras model
@@ -282,427 +405,191 @@ def train_model(
         class_weights: Dictionary of class weights for imbalanced datasets
         learning_rate: Initial learning rate
         multi_label: Whether this is a multi-label classification task
-        batch_size: Batch size for training, will be reduced if OOM occurs
+        batch_size: Batch size for training
     """
-    print(f"Using batch size: {batch_size}")
+    print(f"Training with batch size: {batch_size}")
+    
+    # Use mixed precision for better performance
+    policy = tf.keras.mixed_precision.Policy('mixed_float16')
+    tf.keras.mixed_precision.set_global_policy(policy)
+    
+    # Define model checkpoint directory
+    model_dir = 'models'
+    os.makedirs(model_dir, exist_ok=True)
+    checkpoint_path = os.path.join(model_dir, 'checkpoint.keras')
     
     # Set up callbacks with better learning rate scheduling
-    monitor_metric = 'val_loss' if multi_label else 'val_accuracy'
-    mode = 'min' if monitor_metric == 'val_loss' else 'max'
-    
-    # Define warmup learning rate schedule
-    initial_learning_rate = learning_rate
-    warmup_epochs = 5
-    total_steps = epochs * (1000 // batch_size)  # Adjust based on your dataset size
-    warmup_steps = warmup_epochs * (1000 // batch_size)
-    
-    def warmup_cosine_decay_schedule(step):
-        # Warmup phase
-        if step < warmup_steps:
-            return initial_learning_rate * (step / warmup_steps)
-        # Cosine decay phase
-        progress = (step - warmup_steps) / (total_steps - warmup_steps)
-        return initial_learning_rate * 0.5 * (1 + tf.cos(tf.constant(np.pi) * progress))
+    monitor_metric = 'val_loss'
+    mode = 'min'
     
     callbacks = [
+        # Early stopping to prevent overfitting
         tf.keras.callbacks.EarlyStopping(
             monitor=monitor_metric,
             patience=early_stopping_patience,
             restore_best_weights=True,
-            mode=mode
+            mode=mode,
+            verbose=1
         ),
+        # Reduce learning rate when training plateaus
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor=monitor_metric,
             factor=0.2,
             patience=reduce_lr_patience,
             min_lr=1e-7,
+            mode=mode,
             verbose=1
         ),
+        # Save best model checkpoint
         tf.keras.callbacks.ModelCheckpoint(
-            filepath='models/checkpoint.keras',
+            filepath=checkpoint_path,
             monitor=monitor_metric,
             save_best_only=True,
             mode=mode,
             verbose=1
         ),
-        tf.keras.callbacks.LearningRateScheduler(warmup_cosine_decay_schedule),
-        TimeoutCallback(timeout_seconds=3600),
-        MemoryCleanupCallback(cleanup_frequency=2)
+        # Manage memory during training
+        MemoryCleanupCallback(cleanup_frequency=2),
+        # Stop training if it takes too long (4 hours)
+        TimeoutCallback(timeout_seconds=14400, checkpoint_path=checkpoint_path),
+        # Log training metrics
+        tf.keras.callbacks.CSVLogger(os.path.join(model_dir, 'training_log.csv'), append=True)
     ]
     
-    # Create data augmentation layer
-    data_augmentation = tf.keras.Sequential([
-        tf.keras.layers.RandomRotation(0.2),
-        tf.keras.layers.RandomTranslation(0.1, 0.1),
-        tf.keras.layers.RandomFlip("horizontal"),
-        tf.keras.layers.RandomContrast(0.2),
-        tf.keras.layers.RandomBrightness(0.2),
-        tf.keras.layers.GaussianNoise(0.1)
-    ])
-    
-    # Apply augmentation to training data
-    def augment_data(images, labels):
-        return data_augmentation(images, training=True), labels
-    
-    # Wrap training data with augmentation
-    if isinstance(train_data, tf.data.Dataset):
-        train_data = train_data.map(augment_data,
-                                   num_parallel_calls=tf.data.AUTOTUNE)
-    
-    # Store the original strategy from the model
-    model_strategy = None
-    for layer in model.layers:
-        if hasattr(layer, '_strategy'):
-            model_strategy = layer._strategy
-            break
-    
-    # For multi-label classification with class weights, we need to handle it differently
-    if multi_label and class_weights:
-        print(f"Applying class weights for multi-label classification: {class_weights}")
-        
-        # Important: Clear the session to avoid strategy mixing
-        tf.keras.backend.clear_session()
-        
-        # Clone the model to ensure we're using a fresh model with consistent strategy
-        orig_weights = model.get_weights()
-        config = model.get_config()
-        
-        # If we detected a strategy, use it to recreate the model
-        if model_strategy:
-            with model_strategy.scope():
-                model = tf.keras.Model.from_config(config)
-                model.set_weights(orig_weights)
-        else:
-            # If no strategy detected, recreate with the global strategy
-            with strategy.scope():
-                model = tf.keras.Model.from_config(config)
-                model.set_weights(orig_weights)
-        
+    # Print information about GPU availability
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f"Training on {len(gpus)} GPU(s): {gpus}")
+        # Try to set memory growth for better memory management
         try:
-            # Memory optimization
-            gpus = tf.config.list_physical_devices('GPU')
-            if gpus:
-                try:
-                    for gpu in gpus:
-                        # Try to set memory growth, but don't error if already initialized
-                        try:
-                            tf.config.experimental.set_memory_growth(gpu, True)
-                        except:
-                            print("GPU memory growth already set")
-                except Exception as e:
-                    print(f"Error setting memory growth: {e}")
-            
-            # Temporarily disable mixed precision for better stability with custom loss
-            original_policy = tf.keras.mixed_precision.global_policy()
-            tf.keras.mixed_precision.set_global_policy('float32')
-            
-            # Create custom weighted binary crossentropy with float32 precision
-            def weighted_binary_crossentropy(y_true, y_pred):
-                # Cast inputs to float32 for numerical stability
-                y_true = tf.cast(y_true, tf.float32)
-                y_pred = tf.cast(y_pred, tf.float32)
-                
-                # Standard binary crossentropy calculation
-                epsilon = tf.keras.backend.epsilon()
-                y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
-                bce = -y_true * tf.math.log(y_pred) - (1.0 - y_true) * tf.math.log(1.0 - y_pred)
-                
-                # Create per-class weights tensor
-                weights_tensor = tf.convert_to_tensor(
-                    [float(class_weights.get(i, 1.0)) for i in range(model.output_shape[-1])],
-                    dtype=tf.float32
-                )
-                
-                # Apply class-specific weights to positive examples only
-                class_weighted_bce = bce * (y_true * weights_tensor + (1 - y_true))
-                
-                # Average over class axis first, then batch
-                return tf.reduce_mean(tf.reduce_mean(class_weighted_bce, axis=-1))
-            
-            # Use the same strategy for compilation
-            if model_strategy:
-                with model_strategy.scope():
-                    model.compile(
-                        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                        loss=weighted_binary_crossentropy,
-                        metrics=[
-                            tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-                            tf.keras.metrics.AUC(name='auc', multi_label=True),
-                            tf.keras.metrics.Precision(name='precision'),
-                            tf.keras.metrics.Recall(name='recall')
-                        ]
-                    )
-            else:
-                with strategy.scope():
-                    model.compile(
-                        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                        loss=weighted_binary_crossentropy,
-                        metrics=[
-                            tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-                            tf.keras.metrics.AUC(name='auc', multi_label=True),
-                            tf.keras.metrics.Precision(name='precision'),
-                            tf.keras.metrics.Recall(name='recall')
-                        ]
-                    )
-            
-            # Use the provided batch size (will be reduced if OOM occurs)
-            try_batch_size = batch_size
-            
-            # Train the model with the provided batch size
-            print(f"Training with batch size of {try_batch_size}")
-            history = model.fit(
-                train_data,
-                validation_data=val_data,
-                epochs=epochs,
-                callbacks=callbacks,
-                batch_size=try_batch_size,
-                verbose=1,
-                class_weight=None  # We're handling weights in the loss function
-            )
-            
-            # Restore original mixed precision policy
-            tf.keras.mixed_precision.set_global_policy(original_policy)
-            
-            # Run garbage collection to free memory
-            gc.collect()
-            
-            return history
-            
-        except Exception as e:
-            print(f"Error during training with custom loss: {e}")
-            traceback.print_exc()
-            
-            # Cleanup and memory management
-            gc.collect()
-            if 'original_policy' in locals():
-                tf.keras.mixed_precision.set_global_policy(original_policy)
-            
-            # Fallback: Try with an even smaller batch size
-            try:
-                print("Attempting training with a smaller batch size...")
-                # Use an even smaller batch size
-                try_batch_size = batch_size // 2
-                
-                # Reset the TensorFlow session
-                tf.keras.backend.clear_session()
-                gc.collect()
-                
-                # Recreate model with consistent strategy
-                if model_strategy:
-                    with model_strategy.scope():
-                        model = tf.keras.Model.from_config(config)
-                        model.set_weights(orig_weights)
-                        
-                        # Standard binary crossentropy
-                        model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                            loss=tf.keras.losses.BinaryCrossentropy(),
-                            metrics=[
-                                tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-                                tf.keras.metrics.AUC(name='auc', multi_label=True),
-                                tf.keras.metrics.Precision(name='precision'),
-                                tf.keras.metrics.Recall(name='recall')
-                            ]
-                        )
-                else:
-                    with strategy.scope():
-                        model = tf.keras.Model.from_config(config)
-                        model.set_weights(orig_weights)
-                        
-                        # Standard binary crossentropy
-                        model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                            loss=tf.keras.losses.BinaryCrossentropy(),
-                            metrics=[
-                                tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-                                tf.keras.metrics.AUC(name='auc', multi_label=True),
-                                tf.keras.metrics.Precision(name='precision'),
-                                tf.keras.metrics.Recall(name='recall')
-                            ]
-                        )
-                
-                # Try with the smaller batch size
-                print(f"Training with reduced batch size of {try_batch_size}")
-                history = model.fit(
-                    train_data,
-                    validation_data=val_data,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    batch_size=try_batch_size,
-                    verbose=1,
-                    class_weight=None
-                )
-                print("Training completed with reduced batch size")
-                return history
-                
-            except Exception as fallback_error:
-                print(f"Fallback training also failed: {fallback_error}")
-                print("Falling back to minimal training")
-                
-                # Last resort: Try with minimal settings
-                try:
-                    # One more attempt with even smaller batch size
-                    try_batch_size = max(8, batch_size // 4)
-                    
-                    # Reset the TensorFlow session
-                    tf.keras.backend.clear_session()
-                    gc.collect()
-                    
-                    # Recreate model with consistent strategy
-                    if model_strategy:
-                        with model_strategy.scope():
-                            model = tf.keras.Model.from_config(config)
-                            model.set_weights(orig_weights)
-                            
-                            model.compile(
-                                optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate/10),
-                                loss='binary_crossentropy',
-                                metrics=['accuracy']
-                            )
-                    else:
-                        with strategy.scope():
-                            model = tf.keras.Model.from_config(config)
-                            model.set_weights(orig_weights)
-                            
-                            model.compile(
-                                optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate/10),
-                                loss='binary_crossentropy',
-                                metrics=['accuracy']
-                            )
-                    
-                    history = model.fit(
-                        train_data,
-                        validation_data=val_data,
-                        epochs=min(5, epochs),  # Fewer epochs
-                        callbacks=[TimeoutCallback(timeout_seconds=1800)],
-                        batch_size=try_batch_size,  # Very small batch size
-                        verbose=1,
-                        class_weight=None
-                    )
-                    return history
-                except Exception as minimal_error:
-                    print(f"Minimal training also failed: {minimal_error}")
-                    return None
-    
-    # For standard training without class weights or for single-label
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            print("Memory growth enabled on all GPUs")
+        except:
+            print("Memory growth already set")
     else:
-        # Train the model with standard parameters but use the provided batch size
+        print("Training on CPU")
+    
+    # Configure model for training if using eager execution
+    if tf.executing_eagerly():
+        # Compile with optimized settings
+        optimizer = tf.keras.optimizers.Adam(
+            learning_rate=learning_rate,
+            epsilon=1e-7,
+            amsgrad=True
+        )
+        
+        # Choose appropriate loss function
+        if multi_label:
+            loss = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+            metrics = [
+                tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+                tf.keras.metrics.AUC(name='auc', multi_label=True),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        else:
+            # Use categorical crossentropy for single-label classification
+            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+            metrics = [
+                tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
+                tf.keras.metrics.AUC(name='auc'),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')
+            ]
+        
+        # Compile model with updated settings
+        model.compile(
+            optimizer=optimizer,
+            loss=loss,
+            metrics=metrics
+        )
+    
+    # Calculate steps per epoch based on dataset size
+    if isinstance(train_data, tf.data.Dataset):
+        # For tf.data.Dataset, steps per epoch should be None (auto)
+        steps_per_epoch = None
+        validation_steps = None
+    else:
+        # For custom generators, ensure we have appropriate steps
+        steps_per_epoch = len(train_data)
+        validation_steps = len(val_data)
+    
+    # Train the model with error handling
+    try:
+        # Perform memory cleanup before training
+        gc.collect()
+        
+        history = model.fit(
+            train_data,
+            validation_data=val_data,
+            epochs=epochs,
+            callbacks=callbacks,
+            class_weight=class_weights,
+            batch_size=batch_size,
+            steps_per_epoch=steps_per_epoch,
+            validation_steps=validation_steps,
+            verbose=1
+        )
+        
+        # Final cleanup after training
+        gc.collect()
+        
+        return history
+    
+    except tf.errors.ResourceExhaustedError as oom_error:
+        print(f"Out of memory error: {oom_error}")
+        print("Attempting to recover by reducing batch size...")
+        
+        # Try again with reduced batch size
         try:
-            # Reset the TensorFlow session
+            reduced_batch = max(1, batch_size // 2)
+            print(f"Retrying with batch size: {reduced_batch}")
+            
+            # Clear existing state
             tf.keras.backend.clear_session()
             gc.collect()
             
-            # Recreate model with consistent strategy
-            orig_weights = model.get_weights()
-            config = model.get_config()
+            # Reload model from checkpoint if available
+            if os.path.exists(checkpoint_path):
+                print(f"Loading checkpoint from {checkpoint_path}")
+                model = tf.keras.models.load_model(checkpoint_path)
             
-            if model_strategy:
-                with model_strategy.scope():
-                    model = tf.keras.Model.from_config(config)
-                    model.set_weights(orig_weights)
-                    
-                    # Re-compile with the same parameters
-                    if multi_label:
-                        loss = tf.keras.losses.BinaryCrossentropy()
-                    else:
-                        loss = focal_loss(gamma=2.0, alpha=0.25)
-                        
-                    model.compile(
-                        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                        loss=loss,
-                        metrics=model.metrics
-                    )
-            else:
-                with strategy.scope():
-                    model = tf.keras.Model.from_config(config)
-                    model.set_weights(orig_weights)
-                    
-                    # Re-compile with the same parameters
-                    if multi_label:
-                        loss = tf.keras.losses.BinaryCrossentropy()
-                    else:
-                        loss = focal_loss(gamma=2.0, alpha=0.25)
-                        
-                    model.compile(
-                        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                        loss=loss,
-                        metrics=model.metrics
-                    )
-            
-            try_batch_size = batch_size
-            print(f"Training with batch size of {try_batch_size}")
-            
+            # Train with reduced batch size
             history = model.fit(
                 train_data,
                 validation_data=val_data,
                 epochs=epochs,
                 callbacks=callbacks,
-                batch_size=try_batch_size,
-                verbose=1,
-                class_weight=class_weights if not multi_label else None
+                class_weight=class_weights,
+                batch_size=reduced_batch,
+                steps_per_epoch=steps_per_epoch,
+                validation_steps=validation_steps,
+                verbose=1
             )
-            return history
             
-        except Exception as e:
-            print(f"Error during training: {e}")
+            return history
+        
+        except Exception as fallback_error:
+            print(f"Fallback training also failed: {fallback_error}")
             traceback.print_exc()
             
-            try:
-                print("Attempting training with a smaller batch size...")
-                try_batch_size = batch_size // 2
-                
-                # Reset the TensorFlow session
-                tf.keras.backend.clear_session()
-                gc.collect()
-                
-                # Recreate model with consistent strategy
-                if model_strategy:
-                    with model_strategy.scope():
-                        model = tf.keras.Model.from_config(config)
-                        model.set_weights(orig_weights)
-                        
-                        # Re-compile with the same parameters
-                        if multi_label:
-                            loss = tf.keras.losses.BinaryCrossentropy()
-                        else:
-                            loss = focal_loss(gamma=2.0, alpha=0.25)
-                            
-                        model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                            loss=loss,
-                            metrics=model.metrics
-                        )
-                else:
-                    with strategy.scope():
-                        model = tf.keras.Model.from_config(config)
-                        model.set_weights(orig_weights)
-                        
-                        # Re-compile with the same parameters
-                        if multi_label:
-                            loss = tf.keras.losses.BinaryCrossentropy()
-                        else:
-                            loss = focal_loss(gamma=2.0, alpha=0.25)
-                            
-                        model.compile(
-                            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-                            loss=loss,
-                            metrics=model.metrics
-                        )
-                
-                history = model.fit(
-                    train_data,
-                    validation_data=val_data,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    batch_size=try_batch_size,
-                    verbose=1,
-                    class_weight=class_weights if not multi_label else None
-                )
-                return history
-                
-            except Exception as fallback_error:
-                print(f"Fallback training also failed: {fallback_error}")
+            # Try to return partial training history if checkpoint exists
+            if os.path.exists(checkpoint_path):
+                print("Returning partial training results from checkpoint")
                 return None
+            
+            return None
+    
+    except Exception as e:
+        print(f"Error during training: {e}")
+        traceback.print_exc()
+        
+        # Try to recover if a checkpoint was saved
+        if os.path.exists(checkpoint_path):
+            print(f"Training error occurred, but checkpoint was saved at: {checkpoint_path}")
+        
+        return None
 
 def create_balanced_data_generator(generator, batch_size=32):
     """
@@ -867,7 +754,7 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopp
         model_save_path: Path to save the best model during fine-tuning
     
     Returns:
-        History object containing training metrics
+        History object containing training metrics and the fine-tuned model
     """
     try:
         # Clear any existing session
@@ -917,6 +804,7 @@ def fine_tune_model(model, train_generator, val_generator, epochs=5, early_stopp
             # Add model checkpoint if save path is provided
             if model_save_path:
                 os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+                # Ensure the checkpoint path uses .keras extension
                 checkpoint_path = os.path.join(os.path.dirname(model_save_path), 'best_model.keras')
                 callbacks.append(
                     tf.keras.callbacks.ModelCheckpoint(

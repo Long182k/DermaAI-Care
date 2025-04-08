@@ -38,9 +38,9 @@ def main():
                         help='Path to CSV file with image metadata')
     parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/2019-isic-csv/ISIC_2019_Training_Metadata.csv",
                         help='Path to CSV file with patient metadata (age, sex, anatomical site)')
-    parser.add_argument('--image_dir', type=str, default='/kaggle/input/1000-annotated-images/images',
+    parser.add_argument('--image_dir', type=str, default='/kaggle/input/2019-isic/exp',
                         help='Directory containing detected images')
-    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/1000-annotated-images/labels',
+    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/2019-isic/exp/labels',
                         help='Directory containing YOLO label files')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for training')
@@ -205,12 +205,12 @@ def main():
                 print("\nEvaluation Metrics:")
                 print("-" * 55)
                 print(f"Validation Accuracy: {metrics.get('accuracy', 0):.4f}")
-                print(f"Validation Precision: {metrics.get('weighted_precision', 0):.4f}")
-                print(f"Validation Recall/Sensitivity: {metrics.get('weighted_recall', 0):.4f}")
-                print(f"Validation F1 Score: {metrics.get('weighted_f1', 0):.4f}")
-                print(f"Validation AUC: {metrics.get('weighted_auc', 0):.4f}")
-                print(f"Validation Specificity: {metrics.get('weighted_specificity', 0):.4f}")
-                print(f"Validation ICBHI Score: {metrics.get('weighted_icbhi_score', 0):.4f}")
+                print(f"Validation Precision: {metrics.get('precision', 0):.4f}")
+                print(f"Validation Recall/Sensitivity: {metrics.get('recall', 0):.4f}")
+                print(f"Validation F1 Score: {metrics.get('f1', 0):.4f}")
+                print(f"Validation AUC: {metrics.get('auc', 0):.4f}")
+                print(f"Validation Specificity: {metrics.get('specificity', 0):.4f}")
+                print(f"Validation ICBHI Score: {metrics.get('icbhi_score', 0):.4f}")
                 
                 # Print paths of saved files
                 if 'confusion_matrix_path' in metrics:

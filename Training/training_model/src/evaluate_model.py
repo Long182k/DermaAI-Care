@@ -77,6 +77,25 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
             output_dict=True
         )
         
+        # Print classification report in a tabular format
+        print("\nClassification Report:")
+        print("-" * 50)
+        print(f"{'':>12} {'precision':>10} {'recall':>10} {'f1-score':>10} {'support':>10}")
+        print("-" * 50)
+        
+        # Print metrics for each class
+        for i, class_name in enumerate(class_names):
+            metrics = report[class_name]
+            print(f"{i:>12} {metrics['precision']:>10.2f} {metrics['recall']:>10.2f} {metrics['f1-score']:>10.2f} {metrics['support']:>10.0f}")
+        
+        print("\n" + "-" * 50)
+        # Print accuracy
+        print(f"{'accuracy':>12} {report['accuracy']:>10.2f} {report['accuracy']:>10.2f} {report['accuracy']:>10.2f} {report['macro avg']['support']:>10.0f}")
+        
+        # Print macro and weighted averages
+        print(f"{'macro avg':>12} {report['macro avg']['precision']:>10.2f} {report['macro avg']['recall']:>10.2f} {report['macro avg']['f1-score']:>10.2f} {report['macro avg']['support']:>10.0f}")
+        print(f"{'weighted avg':>12} {report['weighted avg']['precision']:>10.2f} {report['weighted avg']['recall']:>10.2f} {report['weighted avg']['f1-score']:>10.2f} {report['weighted avg']['support']:>10.0f}")
+        
         # Calculate additional metrics using scikit-learn functions
         accuracy = accuracy_score(y_true_classes, y_pred_classes)
         precision = precision_score(y_true_classes, y_pred_classes, average='weighted')
@@ -100,23 +119,12 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = os.path.join(output_dir, f"classification_report_{timestamp}.csv")
         pd.DataFrame(report).to_csv(report_path)
-        print(f"Classification report saved to: {report_path}")
+        print(f"\nClassification report saved to: {report_path}")
         
         # Generate and save confusion matrix
         cm_path = os.path.join(output_dir, f"confusion_matrix_{timestamp}.png")
         plot_confusion_matrix(y_true_classes, y_pred_classes, class_names, output_dir)
         print(f"Confusion matrix saved to: {cm_path}")
-        
-        # Print metrics
-        print("\nEvaluation Metrics:")
-        print("-" * 55)
-        print(f"Validation Accuracy: {accuracy:.4f}")
-        print(f"Validation Precision: {precision:.4f}")
-        print(f"Validation Recall/Sensitivity: {recall:.4f}")
-        print(f"Validation F1 Score: {f1:.4f}")
-        print(f"Validation AUC: {auc_score:.4f}")
-        print(f"Validation Specificity: {specificity:.4f}")
-        print(f"Validation ICBHI Score: {icbhi_score:.4f}")
         
         return {
             'accuracy': accuracy,

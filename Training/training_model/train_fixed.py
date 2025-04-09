@@ -4,11 +4,12 @@ import tensorflow as tf
 import numpy as np
 import gc
 import traceback
+import time
 
 # Import custom modules
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
-from src.model_training import build_peft_model, setup_gpu, log_model_to_mlflow, TimeoutCallback
-from src.model_training_fixed import train_model, fine_tune_model  # Import the fixed functions
+from src.model_training import setup_gpu, log_model_to_mlflow, TimeoutCallback
+from src.model_training_fixed import train_model, fine_tune_model, build_peft_model  # Import the fixed functions
 from src.evaluate_model import evaluate_model
 
 # Define model save paths
@@ -49,7 +50,7 @@ def main():
                         help='Random seed for reproducibility')
     parser.add_argument('--learning_rate', type=float, default=0.0001,
                         help='Initial learning rate')
-    parser.add_argument('--augmentation_strength', type=str, default='medium',
+    parser.add_argument('--augmentation_strength', type=str, default='high',
                         choices=['low', 'medium', 'high'],
                         help='Strength of data augmentation')
     parser.add_argument('--model_save_path', type=str, default=None,
@@ -60,6 +61,10 @@ def main():
                        help='Path to CSV file with patient metadata (age, sex, anatomical site)')
     parser.add_argument('--use_metadata', action='store_true',
                        help='Whether to use patient metadata (age, sex, anatomical site)')
+    parser.add_argument('--focal_loss', action='store_true', default=True,
+                       help='Use focal loss for handling class imbalance')
+    parser.add_argument('--fine_tune_lr', type=float, default=5e-6,
+                       help='Learning rate for fine-tuning')
     
     args = parser.parse_args()
     
@@ -106,7 +111,8 @@ def main():
         
         # Build the model
         print("Building model...")
-        model = build_peft_model(n_classes, multi_label=args.multi_label)
+        print(f"Number of classes: {n_classes}")
+        model = build_peft_model(n_classes, multi_label=args.multi_label, use_focal_loss=args.focal_loss)
         
         if model is None:
             print("Failed to build model. Exiting.")
@@ -114,6 +120,17 @@ def main():
         
         # Print model summary
         model.summary()
+        
+        # Print class distribution and weights
+        print("\nClass distribution and weights:")
+        print("Class Index | Class Name | Weight")
+        print("-" * 40)
+        for class_name, idx in diagnosis_to_idx.items():
+            weight = class_weights.get(idx, 'N/A') if class_weights else 'N/A'
+            if isinstance(weight, str):
+                print(f"{idx:^10} | {class_name:^10} | {weight:^6}")
+            else:
+                print(f"{idx:^10} | {class_name:^10} | {weight:^6.3f}")
         
         # Train the model
         print("Training model...")
@@ -156,21 +173,75 @@ def main():
         if args.fine_tune:
             print("Fine-tuning model...")
             try:
-                # Use the fixed fine_tune_model function without workers/use_multiprocessing
-                fine_tune_history, fine_tuned_model = fine_tune_model(
+                # First evaluate model to see baseline performance
+                print("\nBaseline model performance before fine-tuning:")
+                baseline_metrics = model.evaluate(val_generator, verbose=1)
+                print(f"Baseline metrics: {dict(zip(model.metrics_names, baseline_metrics))}")
+                
+                # Calculate prediction distribution before fine-tuning
+                print("\nAnalyzing prediction distribution before fine-tuning:")
+                
+                # Get a batch from the validation generator, handling both tf.data.Dataset and custom generators
+                if isinstance(val_generator, tf.data.Dataset):
+                    # For tf.data.Dataset, take the first batch
+                    for test_batch_x, test_batch_y in val_generator.take(1):
+                        break
+                else:
+                    # For custom generators (like keras.utils.Sequence), use indexing
+                    test_batch_x, test_batch_y = val_generator[0]
+                
+                preds = model.predict(test_batch_x)
+                preds_classes = np.argmax(preds, axis=1) if preds.shape[1] > 1 else (preds > 0.5).astype(int)
+                print("Prediction class distribution (sample):")
+                for cls in range(min(preds.shape[1], 9)):
+                    count = np.sum(preds_classes == cls)
+                    print(f"  Class {cls}: {count} predictions")
+                
+                # Adjust fine-tuning parameters based on dataset analysis
+                adaptive_fine_tune_epochs = min(30, args.fine_tune_epochs)  # Cap at 30 epochs max
+                adaptive_fine_tune_lr = args.fine_tune_lr
+                if np.mean(baseline_metrics) < 0.3:  # If model is performing poorly
+                    adaptive_fine_tune_lr = 1e-5  # Use higher learning rate
+                    print(f"Adjusting fine-tune learning rate to {adaptive_fine_tune_lr} due to low performance")
+                
+                # Use the fixed fine_tune_model function with model_save_path
+                fine_tuned_model, fine_tune_history = fine_tune_model(
                     model=model,
                     train_generator=train_generator,
                     val_generator=val_generator,
-                    epochs=args.fine_tune_epochs,
-                    early_stopping_patience=args.early_stopping,
-                    multi_label=args.multi_label,
+                    epochs=adaptive_fine_tune_epochs,
+                    learning_rate=adaptive_fine_tune_lr,
                     class_weights=class_weights,
-                    batch_size=args.batch_size,
+                    batch_size=min(16, args.batch_size),  # Smaller batch size for fine-tuning
+                    verbose=1,
                     model_save_path=model_save_path
                 )
                 
                 if fine_tuned_model is not None:
-                    model = fine_tuned_model  # Use the fine-tuned model
+                    # Evaluate to compare with baseline
+                    print("\nFine-tuned model performance:")
+                    fine_tuned_metrics = fine_tuned_model.evaluate(val_generator, verbose=1)
+                    print(f"Fine-tuned metrics: {dict(zip(fine_tuned_model.metrics_names, fine_tuned_metrics))}")
+                    
+                    # Calculate prediction distribution after fine-tuning
+                    print("\nAnalyzing prediction distribution after fine-tuning:")
+                    
+                    # Reuse the same test batch data that we already extracted
+                    preds = fine_tuned_model.predict(test_batch_x)
+                    preds_classes = np.argmax(preds, axis=1) if preds.shape[1] > 1 else (preds > 0.5).astype(int)
+                    print("Prediction class distribution (sample):")
+                    for cls in range(min(preds.shape[1], 9)):
+                        count = np.sum(preds_classes == cls)
+                        print(f"  Class {cls}: {count} predictions")
+                    
+                    # Only use fine-tuned model if it improved over baseline
+                    if np.mean(fine_tuned_metrics) > np.mean(baseline_metrics):
+                        model = fine_tuned_model  # Use the fine-tuned model
+                        print("Successfully fine-tuned the model with improved metrics")
+                    else:
+                        print("Fine-tuning did not improve metrics, using original model")
+                else:
+                    print("Fine-tuning failed, using the original model for evaluation")
             except Exception as fine_tune_error:
                 print(f"Error during fine-tuning: {fine_tune_error}")
                 traceback.print_exc()
@@ -190,11 +261,37 @@ def main():
             for i, class_name in enumerate(class_names):
                 print(f"  {i}: {class_name}")
             
+            # Add a small delay to allow model to stabilize
+            time.sleep(2)
+            
+            # Calculate prediction threshold for each class based on class imbalance
+            # This helps with rare classes
+            thresholds = {}
+            if args.multi_label and class_weights:
+                for class_idx, weight in class_weights.items():
+                    # For ISIC dataset, we need to invert the thresholds since class weights are inverted
+                    # Higher weight means rarer class which needs a lower threshold
+                    if weight > 10.0:  # Very rare classes (VASC, SCC)
+                        thresholds[class_idx] = 0.15  # Much lower threshold
+                    elif weight > 3.0:  # Rare classes (BKL, DF)
+                        thresholds[class_idx] = 0.20  # Lower threshold
+                    elif weight > 1.0:  # Medium classes (AK, BCC)
+                        thresholds[class_idx] = 0.25  # Medium threshold
+                    else:  # Common classes (MEL, NV)
+                        thresholds[class_idx] = 0.30  # Higher threshold
+                
+                print(f"Using custom prediction thresholds: {thresholds}")
+
+                # Add classes 8 (UNK) with a higher threshold
+                if 8 not in thresholds:
+                    thresholds[8] = 0.35
+            
             metrics = evaluate_model(
                 model=model,
                 test_generator=val_generator,
                 class_names=class_names,
-                output_dir=eval_dir
+                output_dir=eval_dir,
+                prediction_thresholds=thresholds if 'thresholds' in locals() else None
             )
             
             if metrics:

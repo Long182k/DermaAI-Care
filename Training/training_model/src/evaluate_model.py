@@ -21,7 +21,7 @@ import gc
 
 
 # Around line 16-20, keep the function signature
-def evaluate_model(model, test_generator, class_names, output_dir=None):
+def evaluate_model(model, test_generator, class_names, output_dir=None, prediction_thresholds=None):
     """
     Evaluate the model and generate metrics, confusion matrix, and classification report.
     
@@ -30,6 +30,7 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
         test_generator: Test data generator or dataset (can be YOLODetectionGenerator or tf.data.Dataset)
         class_names: List of class names
         output_dir: Directory to save evaluation results
+        prediction_thresholds: Dictionary mapping class indices to custom threshold values
     
     Returns:
         Dictionary containing evaluation metrics
@@ -79,12 +80,66 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
             # Convert to numpy arrays
             y_true = np.array(y_true)
             y_pred = np.array(y_pred)
+
+        # Force garbage collection to free up memory
+        gc.collect()
+        
+        # Debug information
+        print(f"Predictions shape: {y_pred.shape}, True labels shape: {y_true.shape}")
+        
+        # Apply custom thresholds for each class if provided
+        if prediction_thresholds and len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
+            print(f"Applying custom prediction thresholds: {prediction_thresholds}")
+            
+            # Initialize prediction classes array with zeros
+            y_pred_classes = np.zeros(y_pred.shape[0], dtype=int)
+            
+            # For each sample, check each class according to its threshold
+            for sample_idx in range(y_pred.shape[0]):
+                sample_pred = y_pred[sample_idx]
                 
-        # Convert predictions to class indices
-        if len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
+                # Apply different thresholds for each class
+                # We'll pick the class with highest confidence above its threshold
+                max_conf = -1
+                max_class = -1
+                
+                for class_idx in range(y_pred.shape[1]):
+                    # Get the confidence for this class
+                    conf = sample_pred[class_idx]
+                    
+                    # Get appropriate threshold (default to 0.5 if not specified)
+                    threshold = 0.5
+                    if str(class_idx) in prediction_thresholds:
+                        threshold = prediction_thresholds[str(class_idx)]
+                    elif class_idx in prediction_thresholds:
+                        threshold = prediction_thresholds[class_idx]
+                    
+                    # Check if this prediction passes the threshold and has highest confidence
+                    if conf > threshold and conf > max_conf:
+                        max_conf = conf
+                        max_class = class_idx
+                
+                # If no class passed its threshold, use the original argmax
+                if max_class == -1:
+                    # Use a lower minimum threshold (0.1) just to avoid no predictions at all
+                    max_class = np.argmax(sample_pred)
+                    if sample_pred[max_class] > 0.1:
+                        y_pred_classes[sample_idx] = max_class
+                    else:
+                        # If all predictions are below 0.1, use a fallback:
+                        # Pick the most common class in training data (typically class 1 for skin data)
+                        y_pred_classes[sample_idx] = 1  # NV is usually most common
+                else:
+                    y_pred_classes[sample_idx] = max_class
+        elif len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
+            # Standard approach - take argmax for multi-class
             y_pred_classes = np.argmax(y_pred, axis=1)
         else:
-            y_pred_classes = (y_pred > 0.5).astype(int)
+            # Binary case
+            threshold = 0.5
+            if prediction_thresholds and 0 in prediction_thresholds:
+                threshold = prediction_thresholds[0]
+            y_pred_classes = (y_pred > threshold).astype(int)
         
         # Convert true labels to class indices if they're one-hot encoded
         if len(y_true.shape) > 1 and y_true.shape[1] > 1:
@@ -93,8 +148,8 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
             y_true_classes = y_true.astype(int)
         
         # Generate classification report
-        # Get unique classes in the predicted and true labels
-        unique_classes = np.unique(np.concatenate([y_true_classes, y_pred_classes]))
+        # Get unique classes from the training data (not just predicted classes)
+        unique_classes = sorted(np.unique(y_true_classes))
         
         # Map the unique class indices to class names
         used_class_names = []
@@ -152,13 +207,15 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
         print("-" * 50)
         
         # Count predictions per class
-        pred_counts = np.bincount(y_pred_classes, minlength=len(used_class_names))
+        classes_to_count = max(len(used_class_names), np.max(y_pred_classes) + 1)
+        pred_counts = np.bincount(y_pred_classes, minlength=classes_to_count)
         print("Predictions per class:")
         for i, count in enumerate(pred_counts):
-            if i < len(used_class_names):
-                class_name = used_class_names[i]
+            if i < len(class_names):
+                class_name = class_names[i]
                 total = np.sum(y_true_classes == i)
-                print(f"  Class {i} ({class_name}): {count} predictions out of {total} samples ({count/max(1, total)*100:.2f}%)")
+                percentage = count/max(1, total)*100
+                print(f"  Class {i} ({class_name}): {count} predictions out of {total} samples ({percentage:.2f}%)")
         
         # Print raw prediction distribution
         print("\nPrediction confidence distribution:")
@@ -168,8 +225,8 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
             max_confidences = np.max(y_pred, axis=0)
             
             for i, (mean_conf, max_conf) in enumerate(zip(mean_confidences, max_confidences)):
-                if i < len(used_class_names):
-                    class_name = used_class_names[i]
+                if i < len(class_names):
+                    class_name = class_names[i]
                     print(f"  Class {i} ({class_name}): Avg confidence: {mean_conf:.4f}, Max confidence: {max_conf:.4f}")
                     
             # Show histogram of highest confidence predictions
@@ -177,7 +234,8 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
             top_class_confidences = np.max(y_pred, axis=1)
             
             print("\nDistribution of highest confidence predictions:")
-            for i, class_name in enumerate(used_class_names):
+            for i in range(len(class_names)):
+                class_name = class_names[i]
                 class_mask = top_class_indices == i
                 count = np.sum(class_mask)
                 if count > 0:
@@ -200,125 +258,107 @@ def evaluate_model(model, test_generator, class_names, output_dir=None):
             else:
                 print(f"{i:>12} {0:>10.2f} {0:>10.2f} {0:>10.2f} {0:>10.0f}")
         
-        print("\n" + "-" * 50)
-        # Print accuracy
-        print(f"{'accuracy':>12} {report['accuracy']:>10.2f} {report['accuracy']:>10.2f} {report['accuracy']:>10.2f} {report['macro avg']['support']:>10.0f}")
+        print("-" * 50)
+        if 'accuracy' in report:
+            print(f"{'accuracy':>12} {report['accuracy']:>10.2f} {report['accuracy']:>10.2f} {report['accuracy']:>10.2f} {report['macro avg']['support']:>10.0f}")
+        if 'macro avg' in report:
+            print(f"{'macro avg':>12} {report['macro avg']['precision']:>10.2f} {report['macro avg']['recall']:>10.2f} {report['macro avg']['f1-score']:>10.2f} {report['macro avg']['support']:>10.0f}")
+        if 'weighted avg' in report:
+            print(f"{'weighted avg':>12} {report['weighted avg']['precision']:>10.2f} {report['weighted avg']['recall']:>10.2f} {report['weighted avg']['f1-score']:>10.2f} {report['weighted avg']['support']:>10.0f}")
+
+        # Save classification report to CSV
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = os.path.join(output_dir, f"classification_report_{timestamp}.csv")
         
-        # Print macro and weighted averages
-        print(f"{'macro avg':>12} {report['macro avg']['precision']:>10.2f} {report['macro avg']['recall']:>10.2f} {report['macro avg']['f1-score']:>10.2f} {report['macro avg']['support']:>10.0f}")
-        print(f"{'weighted avg':>12} {report['weighted avg']['precision']:>10.2f} {report['weighted avg']['recall']:>10.2f} {report['weighted avg']['f1-score']:>10.2f} {report['weighted avg']['support']:>10.0f}")
+        # Convert report to DataFrame for easy saving
+        report_df = pd.DataFrame(report).transpose()
+        report_df.to_csv(report_path)
         
-        # Calculate metrics from the classification report for consistency
-        accuracy = report['accuracy']
-        precision = report['weighted avg']['precision']
-        recall = report['weighted avg']['recall']
-        f1 = report['weighted avg']['f1-score']
-        
-        # Calculate AUC for binary classification
-        if len(used_class_names) == 2:
-            try:
-                # For binary classification
-                if y_pred.shape[1] >= 2:
-                    auc = roc_auc_score(y_true_classes, y_pred[:, 1])
-                else:
-                    # Single output neuron case
-                    auc = roc_auc_score(y_true_classes, y_pred.flatten())
-            except Exception as e:
-                print(f"Error calculating binary AUC: {e}")
-                # Fallback if error with AUC calculation
-                auc = 0.5
-        else:
-            try:
-                # Ensure y_pred has the right shape for multi-class ROC AUC
-                if len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
-                    # For multi-class classification, ensure we're only using classes present in data
-                    # Check if we have enough columns in y_pred for all classes
-                    if y_pred.shape[1] >= max(used_class_indices) + 1:
-                        # Extract only the probabilities for classes we have
-                        y_pred_subset = np.zeros((y_pred.shape[0], len(used_class_indices)))
-                        for i, idx in enumerate(used_class_indices):
-                            if idx < y_pred.shape[1]:
-                                y_pred_subset[:, i] = y_pred[:, idx]
-                        
-                        # Use the subset for AUC calculation
-                        auc = roc_auc_score(
-                            tf.keras.utils.to_categorical(y_true_classes, num_classes=len(used_class_indices)), 
-                            y_pred_subset, 
-                            multi_class='ovr'
-                        )
-                    else:
-                        print(f"Warning: y_pred shape {y_pred.shape} doesn't match required classes {used_class_indices}")
-                        # Fall back to calculating AUC with available classes
-                        auc = roc_auc_score(y_true_classes, y_pred, multi_class='ovr')
-                else:
-                    # If predictions are single-dimensional, convert to probabilities
-                    auc = roc_auc_score(y_true_classes, tf.keras.utils.to_categorical(y_pred_classes), multi_class='ovr')
-            except Exception as e:
-                print(f"Error calculating multi-class AUC: {e}")
-                # Fallback if error with AUC calculation
-                auc = 0.5
-        
-        # Calculate confusion matrix
+        # Generate confusion matrix
         cm = confusion_matrix(y_true_classes, y_pred_classes, labels=used_class_indices)
         
-        # Calculate specificity for binary classification
-        if len(used_class_names) == 2:
-            tn = cm[0, 0]
-            fp = cm[0, 1]
-            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-        else:
-            # For multi-class, calculate average specificity
-            specificities = []
-            for i in range(len(used_class_indices)):
-                # True negatives are all the samples that are not in class i and not predicted as class i
-                tn = np.sum(np.delete(np.delete(cm, i, axis=0), i, axis=1))
-                # False positives are samples that are not in class i but predicted as class i
-                fp = np.sum(np.delete(cm[:, i], i))
-                spec = tn / (tn + fp) if (tn + fp) > 0 else 0
-                specificities.append(spec)
-            specificity = np.mean(specificities)
+        # Plot confusion matrix
+        confusion_matrix_path = os.path.join(output_dir, f"confusion_matrix_{timestamp}.png")
+        plot_confusion_matrix(y_true_classes, y_pred_classes, used_class_names, confusion_matrix_path, used_class_indices)
+        
+        # Additional evaluation: AUC and specificity
+        # Calculate AUC only if there are multiple classes
+        auc_value = 0
+        try:
+            if len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
+                # Multi-class or multi-label
+                if y_pred.shape[1] == 2:
+                    # Binary problem represented as 2 outputs
+                    auc_value = roc_auc_score(y_true[:, 1], y_pred[:, 1])
+                else:
+                    # True multi-class problem
+                    if np.max(y_true_classes) < y_pred.shape[1]:
+                        # Check if we have enough classes in the true labels
+                        auc_value = roc_auc_score(
+                            tf.keras.utils.to_categorical(y_true_classes, num_classes=y_pred.shape[1]), 
+                            y_pred, 
+                            multi_class='ovr', 
+                            average='weighted'
+                        )
+                    else:
+                        print("Warning: Class mismatch between predictions and true labels. Using fallback AUC calculation.")
+                        # Fallback AUC calculation
+                        auc_value = 0.5  # Default value
+            else:
+                # Binary problem with single output
+                auc_value = roc_auc_score(y_true, y_pred)
+        except Exception as auc_error:
+            print(f"Error calculating AUC: {auc_error}")
+            auc_value = 0.5  # Default fallback
+            
+        # Calculate sensitivity (recall) and specificity
+        # Sensitivity is already calculated as recall
+        sensitivity = report['macro avg']['recall']
+        
+        # Specificity calculation
+        specificity = 0
+        spec_scores = []
+        
+        # Calculate specificity for each class
+        for i in range(len(used_class_indices)):
+            true_negatives = np.sum((y_true_classes != used_class_indices[i]) & (y_pred_classes != used_class_indices[i]))
+            false_positives = np.sum((y_true_classes != used_class_indices[i]) & (y_pred_classes == used_class_indices[i]))
+            
+            if true_negatives + false_positives > 0:
+                class_specificity = true_negatives / (true_negatives + false_positives)
+                spec_scores.append(class_specificity)
+            else:
+                spec_scores.append(0)
+        
+        # Macro-average specificity
+        specificity = np.mean(spec_scores) if spec_scores else 0
         
         # Calculate ICBHI score (average of sensitivity and specificity)
-        icbhi_score = (recall + specificity) / 2
+        icbhi_score = (sensitivity + specificity) / 2
         
-        # Generate timestamp for unique filenames
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save classification report
-        report_path = os.path.join(output_dir, f"classification_report_{timestamp}.csv")
-        pd.DataFrame(report).to_csv(report_path)
-        print(f"Classification report saved to: {report_path}")
-        
-        # Save confusion matrix visualization
-        cm_path = os.path.join(output_dir, f"confusion_matrix_{timestamp}.png")
-        plot_confusion_matrix(y_true_classes, y_pred_classes, used_class_names, cm_path, used_class_indices)
-        print(f"Confusion matrix saved to: {cm_path}")
-        
-        # Print metrics summary
-        print("\nEvaluation Metrics:")
-        print("-" * 55)
-        print(f"Validation Accuracy: {accuracy:.4f}")
-        print(f"Validation Precision: {precision:.4f}")
-        print(f"Validation Recall/Sensitivity: {recall:.4f}")
-        print(f"Validation F1 Score: {f1:.4f}")
-        print(f"Validation AUC: {auc:.4f}")
-        print(f"Validation Specificity: {specificity:.4f}")
-        print(f"Validation ICBHI Score: {icbhi_score:.4f}")
-        
-        return {
-            'accuracy': accuracy,
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'auc': auc,
+        # Compile all metrics
+        metrics = {
+            'accuracy': report['accuracy'],
+            'precision': report['macro avg']['precision'],
+            'recall': report['macro avg']['recall'],
+            'f1': report['macro avg']['f1-score'],
+            'auc': auc_value,
             'specificity': specificity,
             'icbhi_score': icbhi_score,
-            'confusion_matrix_path': cm_path,
+            'confusion_matrix_path': confusion_matrix_path,
             'report_path': report_path
         }
         
+        # Print ICBHI score components
+        print(f"Validation ICBHI Score: {icbhi_score:.4f}")
+        print(f"  - Sensitivity: {sensitivity:.4f}")
+        print(f"  - Specificity: {specificity:.4f}")
+        
+        # Return metrics
+        return metrics
+    
     except Exception as e:
-        print(f"Error during evaluation: {e}")
+        print(f"Error during evaluation: {str(e)}")
         traceback.print_exc()
         return None
 

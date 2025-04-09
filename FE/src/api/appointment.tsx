@@ -11,6 +11,7 @@ export interface Doctor {
   certifications?: string;
   avatarUrl?: string;
   role: string;
+  languages?: string;
 }
 
 export interface Schedule {
@@ -23,7 +24,13 @@ export interface Schedule {
   updatedAt: string;
 }
 
-export type ScheduleFilter = 'day' | 'week' | 'month' | undefined;
+export type ScheduleFilter = "day" | "week" | "month" | undefined;
+
+export interface CreateAppointmentDto {
+  patientId: string;
+  scheduleId: string;
+  notes?: string;
+}
 
 export const doctorApi = {
   getAllDoctors: async (page: number = 1, limit: number = 10) => {
@@ -32,15 +39,29 @@ export const doctorApi = {
     );
     return response.data;
   },
-  
+
   getDoctorById: async (doctorId: string) => {
     const response = await axiosClient.get(`/users/doctor/${doctorId}`);
     return response.data;
   },
-  
-  getDoctorSchedules: async (doctorId: string, startDate: Date, endDate: Date, filter?: ScheduleFilter) => {
-    const url = `/schedules/doctor/${doctorId}?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}${filter ? `&filter=${filter}` : ''}`;
+
+  getDoctorSchedules: async (
+    doctorId: string,
+    startDate: Date,
+    endDate: Date,
+    filter?: ScheduleFilter
+  ) => {
+    const url = `/schedules/doctor/${doctorId}?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}${
+      filter ? `&filter=${filter}` : ""
+    }`;
     const response = await axiosClient.get(url);
+    return response.data;
+  },
+};
+
+export const appointmentApi = {
+  createAppointment: async (data: CreateAppointmentDto) => {
+    const response = await axiosClient.post("/appointments", data);
     return response.data;
   },
 };

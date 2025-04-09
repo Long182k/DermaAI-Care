@@ -8,9 +8,59 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useAppStore } from "@/store";
+import { useMutation } from "@tanstack/react-query";
+
+import { AxiosError } from "axios";
+import { ErrorResponseData } from "@/@util/interface/auth.interface";
+import { useToast } from "@/hooks/use-toast";
 
 export const Navbar = () => {
+  const { userInfo, logout } = useAppStore();
+  const { toast } = useToast();
+
   const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    try {
+      logoutMutation.mutate();
+
+      toast({
+        title: "Login successful",
+        description: "You have been logged in.",
+      });
+    } catch (error) {
+      toast({
+        title: "Login failed",
+        description: "Please check your credentials and try again.",
+      });
+    }
+  };
+
+  const logoutMutation = useMutation({
+    mutationFn: logout,
+    onSuccess: () => {
+      toast({
+        title: "Login successful",
+        description: "You have been logged in.",
+      });
+      navigate("/");
+    },
+    onError: (error: AxiosError<ErrorResponseData>) => {
+      if (error.response?.status === 401) {
+        const message = error.response?.data?.message;
+        toast({
+          title: "Login failed",
+          description: message,
+        });
+      } else {
+        toast({
+          title: "Login failed",
+          description: "Try Again",
+        });
+      }
+    },
+  });
 
   const languages = [
     { code: "en", name: "English" },
@@ -124,10 +174,35 @@ export const Navbar = () => {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Button onClick={() => navigate("/auth")}>
-            <UserCircle className="mr-2 h-5 w-5" />
-            Sign In
-          </Button>
+          {/* User Menu */}
+          {userInfo && Object.keys(userInfo).length > 0 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline">
+                  <UserCircle className="mr-2 h-5 w-5" />
+                  Hello, {userInfo.userName}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => navigate("/profile")}>
+                  Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    handleLogout();
+                    navigate("/");
+                  }}
+                >
+                  Logout
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button onClick={() => navigate("/auth")}>
+              <UserCircle className="mr-2 h-5 w-5" />
+              Sign In
+            </Button>
+          )}
         </div>
       </div>
     </nav>

@@ -74,23 +74,23 @@ export class AppointmentService {
         },
       });
 
-      if (appointment) {
-        await this.mailerService.sendMail({
-          to: appointment.Patient.email,
-          subject: `Appointment Reminder: Your Appointment with Dr. ${appointment.Doctor.userName}`,
-          template: 'appointment-reminder',
-          context: {
-            patientName: appointment.Patient.userName,
-            doctorName: appointment.Doctor.userName,
-            appointmentStartTime: appointment.Schedule.startTime,
-            appointmentEndTime: appointment.Schedule.endTime,
-            notes: appointment.notes,
-            doctorEmail: appointment.Doctor.email,
-            doctorAvatar: appointment.Doctor.avatarUrl,
-            year: new Date().getFullYear(),
-          },
-        });
-      }
+      // if (appointment) {
+      //   await this.mailerService.sendMail({
+      //     to: appointment.Patient.email,
+      //     subject: `Appointment Reminder: Your Appointment with Dr. ${appointment.Doctor.userName}`,
+      //     template: 'appointment-reminder',
+      //     context: {
+      //       patientName: appointment.Patient.userName,
+      //       doctorName: appointment.Doctor.userName,
+      //       appointmentStartTime: appointment.Schedule.startTime,
+      //       appointmentEndTime: appointment.Schedule.endTime,
+      //       notes: appointment.notes,
+      //       doctorEmail: appointment.Doctor.email,
+      //       doctorAvatar: appointment.Doctor.avatarUrl,
+      //       year: new Date().getFullYear(),
+      //     },
+      //   });
+      // }
 
       return appointment;
     });

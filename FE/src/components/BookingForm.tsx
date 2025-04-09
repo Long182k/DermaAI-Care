@@ -40,11 +40,6 @@ export const BookingForm = () => {
 
     // Here you would typically make an API call to save the booking
     toast.success("Appointment booked successfully!");
-    console.log({
-      date,
-      doctorId: selectedDoctor,
-      time: selectedTime,
-    });
   };
 
   return (
@@ -92,11 +87,7 @@ export const BookingForm = () => {
         </Select>
       </div>
 
-      <Button
-        onClick={handleBooking}
-        className="w-full"
-        size="lg"
-      >
+      <Button onClick={handleBooking} className="w-full" size="lg">
         Book Appointment
       </Button>
     </div>

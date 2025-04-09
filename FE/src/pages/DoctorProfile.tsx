@@ -2,28 +2,115 @@ import { Navbar } from "@/components/Navbar";
 import { useParams, useNavigate } from "react-router-dom";
 import { Calendar, ArrowLeft, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
-import { useQuery } from "@tanstack/react-query";
-import { doctorApi, Schedule, ScheduleFilter } from "@/api/appointment";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import {
+  doctorApi,
+  Schedule,
+  ScheduleFilter,
+  appointmentApi,
+  CreateAppointmentDto,
+} from "@/api/appointment";
 import { Button } from "@/components/ui/button";
 import { format, parseISO, startOfWeek, addDays, addWeeks } from "date-fns";
 import { useState } from "react";
+import { useToast } from "@/components/ui/use-toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { useAppStore } from "@/store";
 
 const DoctorProfile = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [currentWeek, setCurrentWeek] = useState(0);
-  const [filter, setFilter] = useState<ScheduleFilter>('week');
-
+  const [filter, setFilter] = useState<ScheduleFilter>("week");
+  const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(
+    null
+  );
+  console.log("🚀 selectedSchedule:", selectedSchedule);
+  const [notes, setNotes] = useState("");
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const { userInfo } = useAppStore();
   // Get current date range for schedules
   const today = new Date();
   const startDate = addWeeks(startOfWeek(today), currentWeek);
   const endDate = addDays(startDate, 6);
+
+  // Function to handle schedule selection and open modal
+  const handleScheduleSelect = (schedule: Schedule) => {
+    setSelectedSchedule(schedule);
+    setNotes("");
+    setIsModalOpen(true);
+    // Add schedule ID to URL without navigating
+    window.history.pushState(
+      {},
+      "",
+      `${window.location.pathname}?scheduleId=${schedule.id}`
+    );
+  };
+
+  // Function to handle booking appointment after notes are added
+  const handleBookAppointment = () => {
+    if (selectedSchedule) {
+      // Clear schedule ID from URL before navigating
+      window.history.pushState({}, "", window.location.pathname);
+      createAppointmentMutation.mutate({
+        patientId: userInfo?.userId.toString(),
+        scheduleId: selectedSchedule.id,
+        notes: notes,
+      });
+    }
+    setIsModalOpen(false);
+  };
+
+  // Add useMutation hook for appointment creation
+  const createAppointmentMutation = useMutation({
+    mutationFn: (data: CreateAppointmentDto) =>
+      appointmentApi.createAppointment(data),
+    onSuccess: () => {
+      toast({
+        title: "Appointment booked successfully",
+        description: "Your appointment has been scheduled.",
+        variant: "default",
+      });
+      navigate("/appointments");
+    },
+    onError: (error) => {
+      const { response } = error;
+      toast({
+        title: "Failed to book appointment",
+        description:
+          response.data.message !== undefined
+            ? response.data.message
+            : "Please try again later.",
+        variant: "destructive",
+      });
+      console.error("Appointment booking error:", error);
+    },
+  });
+
+  // Function to handle modal close
+  const handleModalClose = (open: boolean) => {
+    if (!open) {
+      // Clear schedule ID from URL when modal is closed
+      window.history.pushState({}, "", window.location.pathname);
+    }
+    setIsModalOpen(open);
+  };
 
   const {
     data: doctor,
@@ -41,7 +128,8 @@ const DoctorProfile = () => {
     error: schedulesError,
   } = useQuery({
     queryKey: ["doctorSchedules", id, startDate, endDate, filter],
-    queryFn: () => doctorApi.getDoctorSchedules(id!, startDate, endDate, filter),
+    queryFn: () =>
+      doctorApi.getDoctorSchedules(id!, startDate, endDate, filter),
     enabled: !!id,
   });
 
@@ -66,14 +154,14 @@ const DoctorProfile = () => {
 
   const getFilterLabel = () => {
     switch (filter) {
-      case 'day':
-        return 'Day View';
-      case 'week':
-        return 'Week View';
-      case 'month':
-        return 'Month View';
+      case "day":
+        return "Day View";
+      case "week":
+        return "Week View";
+      case "month":
+        return "Month View";
       default:
-        return 'All Schedules';
+        return "All Schedules";
     }
   };
 
@@ -186,7 +274,14 @@ const DoctorProfile = () => {
                 <div className="flex flex-col sm:flex-row gap-4 mt-6">
                   <Button
                     className="flex-1"
-                    onClick={() => navigate(`/book-appointment/${doctor.id}`)}
+                    onClick={() => {
+                      // Use the first available schedule if any exist
+                      const firstSchedule =
+                        schedules && schedules.length > 0 ? schedules[0] : null;
+                      if (firstSchedule) {
+                        handleScheduleSelect(firstSchedule);
+                      }
+                    }}
                   >
                     Book Appointment
                   </Button>
@@ -212,39 +307,45 @@ const DoctorProfile = () => {
                   {/* Filter dropdown */}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="outline">
-                        {getFilterLabel()}
-                      </Button>
+                      <Button variant="outline">{getFilterLabel()}</Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleFilterChange('day')}>
+                      <DropdownMenuItem
+                        onClick={() => handleFilterChange("day")}
+                      >
                         Day View
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleFilterChange('week')}>
+                      <DropdownMenuItem
+                        onClick={() => handleFilterChange("week")}
+                      >
                         Week View
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleFilterChange('month')}>
+                      <DropdownMenuItem
+                        onClick={() => handleFilterChange("month")}
+                      >
                         Month View
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleFilterChange(undefined)}>
+                      <DropdownMenuItem
+                        onClick={() => handleFilterChange(undefined)}
+                      >
                         All Schedules
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  
+
                   {/* Navigation buttons */}
                   <Button
                     variant="outline"
                     onClick={() => setCurrentWeek(currentWeek - 1)}
                     disabled={currentWeek <= 0}
                   >
-                    Previous {filter || 'Period'}
+                    Previous {filter || "Period"}
                   </Button>
                   <Button
                     variant="outline"
                     onClick={() => setCurrentWeek(currentWeek + 1)}
                   >
-                    Next {filter || 'Period'}
+                    Next {filter || "Period"}
                   </Button>
                 </div>
               </div>
@@ -263,41 +364,122 @@ const DoctorProfile = () => {
               ) : schedules?.length === 0 ? (
                 <div className="text-center py-8 border rounded-lg">
                   <p className="text-muted-foreground">
-                    No available schedules for this {filter || 'period'}.
+                    No available schedules for this {filter || "period"}.
                   </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {schedulesByDay && Object.entries(schedulesByDay).map(([day, daySchedules]) => {
-                    // Find earliest and latest times for this day
-                    if (!Array.isArray(daySchedules) || daySchedules.length === 0) return null;
-                    
-                    const sortedSchedules = [...daySchedules].sort((a, b) => 
-                      new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
-                    );
-                    
-                    const earliestTime = sortedSchedules[0].startTime;
-                    const latestTime = sortedSchedules[sortedSchedules.length - 1].endTime;
-                    
-                    return (
-                      <div
-                        key={day}
-                        className="p-6 rounded-lg border bg-card hover:shadow-md transition-shadow cursor-pointer"
-                        onClick={() => navigate(`/book-appointment/${doctor.id}?day=${day}`)}
-                      >
-                        <h3 className="font-semibold text-lg mb-2">{day}</h3>
-                        <p className="text-muted-foreground">
-                          {format(parseISO(earliestTime), "h:mm a")} - {format(parseISO(latestTime), "h:mm a")}
-                        </p>
-                      </div>
-                    );
-                  })}
+                  {schedulesByDay &&
+                    Object.entries(schedulesByDay).map(
+                      ([day, daySchedules]) => {
+                        // Find earliest and latest times for this day
+                        if (
+                          !Array.isArray(daySchedules) ||
+                          daySchedules.length === 0
+                        )
+                          return null;
+
+                        const sortedSchedules = [...daySchedules].sort(
+                          (a, b) =>
+                            new Date(a.startTime).getTime() -
+                            new Date(b.startTime).getTime()
+                        );
+
+                        const earliestTime = sortedSchedules[0].startTime;
+                        const latestTime =
+                          sortedSchedules[sortedSchedules.length - 1].endTime;
+
+                        // Check if schedule is booked
+                        const isBooked = sortedSchedules[0].status === "BOOKED";
+
+                        return (
+                          <div
+                            key={day}
+                            className={`p-6 rounded-lg border bg-card ${
+                              isBooked
+                                ? "opacity-70 cursor-not-allowed"
+                                : "hover:shadow-md cursor-pointer"
+                            } transition-shadow`}
+                            onClick={() => {
+                              // Only allow selection if not booked
+                              if (!isBooked) {
+                                const schedule = sortedSchedules[0];
+                                handleScheduleSelect(schedule);
+                              } else {
+                                toast({
+                                  title: "Schedule unavailable",
+                                  description:
+                                    "This time slot is already booked.",
+                                  variant: "destructive",
+                                });
+                              }
+                            }}
+                          >
+                            <h3 className="font-semibold text-lg mb-2">
+                              {day}
+                            </h3>
+                            <p className="text-muted-foreground">
+                              {format(parseISO(earliestTime), "h:mm a")} -{" "}
+                              {format(parseISO(latestTime), "h:mm a")}
+                            </p>
+                            {isBooked && (
+                              <p className="text-red-500 mt-2 text-sm font-medium">
+                                Booked
+                              </p>
+                            )}
+                          </div>
+                        );
+                      }
+                    )}
                 </div>
               )}
             </motion.div>
           </div>
         </div>
       </main>
+
+      {/* Appointment Notes Modal */}
+      <Dialog open={isModalOpen} onOpenChange={handleModalClose}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Book Appointment</DialogTitle>
+            <DialogDescription>
+              {selectedSchedule && (
+                <>
+                  Appointment with Dr. {doctor.firstName} {doctor.lastName} on{" "}
+                  {format(parseISO(selectedSchedule.startTime), "EEEE, MMMM d")}{" "}
+                  at {format(parseISO(selectedSchedule.startTime), "h:mm a")}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="notes">Additional Notes</Label>
+              <Textarea
+                id="notes"
+                placeholder="Please describe your symptoms or any specific concerns..."
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={5}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                // Clear schedule ID from URL
+                window.history.pushState({}, "", window.location.pathname);
+                setIsModalOpen(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleBookAppointment}>Continue</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

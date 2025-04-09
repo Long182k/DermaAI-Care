@@ -18,35 +18,40 @@ import NotFound from "./pages/NotFound";
 import AppointmentsPage from "./pages/AppointmentsPage";
 import PaymentPage from "./pages/PaymentPage";
 import AnalysisPage from "./pages/AnalysisPage";
+import { useAppStore } from "./store";
 
 const queryClient = new QueryClient();
+const App = () => {
+  const { userInfo } = useAppStore();
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/services" element={<Services />} />
-          <Route path="/doctors" element={<Doctors />} />
-          <Route path="/doctor/:id" element={<DoctorProfile />} />
-          <Route path="/contact" element={<Contact />} />
-          <Route path="/analysis" element={<Analysis />} />
-          <Route path="/booking" element={<Booking />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/privacy" element={<Privacy />} />
-          <Route path="/appointments" element={<AppointmentsPage />} />
-          <Route path="/payment/:id" element={<PaymentPage />} />
-          <Route path="/analysis" element={<AnalysisPage />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
-);
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            <Route path="/about" element={<About />} />
+            <Route path="/services" element={<Services />} />
+            <Route path="/doctors" element={<Doctors />} />
+            <Route path="/doctor/:id" element={<DoctorProfile />} />
+            <Route path="/book-appointment/:id" element={<DoctorProfile />} />
+            <Route path="/contact" element={<Contact />} />
+            <Route path="/analysis" element={<Analysis />} />
+            <Route path="/booking" element={<Booking />} />
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/auth" element={<Auth />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/appointments" element={<AppointmentsPage />} />
+            <Route path="/payment/:id" element={<PaymentPage />} />
+            <Route path="/analysis" element={<AnalysisPage />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+};
 
 export default App;

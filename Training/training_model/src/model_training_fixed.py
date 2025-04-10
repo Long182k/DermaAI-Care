@@ -4,6 +4,40 @@ import os
 import traceback
 import gc
 
+# Add focal loss implementation
+def focal_loss(gamma=2.0, alpha=0.25):
+    """
+    Focal Loss function for handling class imbalance in multi-class classification
+    
+    Args:
+        gamma: Focusing parameter that controls how much to focus on hard examples
+        alpha: Weighting factor for rare classes
+        
+    Returns:
+        A loss function that can be used with Keras models
+    """
+    def loss_function(y_true, y_pred):
+        # Convert one-hot encoded y_true to class indices if needed
+        if len(tf.shape(y_true)) > 1 and tf.shape(y_true)[1] > 1:
+            y_true = tf.argmax(y_true, axis=1)
+        
+        # Convert to one-hot encoding for focal loss calculation
+        y_true_one_hot = tf.one_hot(tf.cast(y_true, tf.int32), depth=tf.shape(y_pred)[1])
+        
+        # Calculate focal loss
+        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+            labels=y_true_one_hot, 
+            logits=y_pred
+        )
+        
+        # Apply focusing parameter
+        p_t = tf.exp(-cross_entropy)
+        focal_loss = alpha * tf.pow(1 - p_t, gamma) * cross_entropy
+        
+        return tf.reduce_mean(focal_loss)
+    
+    return loss_function
+
 def train_model(model, train_generator, val_generator, epochs=50, batch_size=32, 
                 early_stopping_patience=10, reduce_lr_patience=5, 
                 callbacks=None, class_weights=None, model_save_path=None,
@@ -156,8 +190,14 @@ def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epo
             # For other generators, use indexing
             x_test, y_test = val_generator[0]
         
-        # Get predictions
-        preds = model.predict(x_test)
+        # Get predictions - handle the input properly
+        try:
+            preds = model.predict(x_test, verbose=0)  # Add verbose=0 to reduce output and only pass x_test
+        except Exception as e:
+            print(f"Error during prediction: {str(e)}")
+            traceback.print_exc()
+            preds = None
+            return model
         
         # Display class distribution
         if len(preds.shape) > 1 and preds.shape[1] > 1:  # Multi-class
@@ -365,289 +405,94 @@ def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epo
         traceback.print_exc()
         return model
 
-def build_peft_model(num_classes, multi_label=False, use_focal_loss=False):
+def build_peft_model(num_classes=9, multi_label=False, use_focal_loss=True, 
+                    initial_bias=-0.5, extra_regularization=False):
     """
-    Build an EfficientNet model with Parameter-Efficient Fine-Tuning (PEFT) approach.
+    Build a model with Parameter-Efficient Fine-Tuning capabilities
     
     Args:
-        num_classes: Number of classes for classification
+        num_classes: Number of output classes
         multi_label: Whether to use multi-label classification
-        use_focal_loss: Whether to use focal loss for class imbalance
+        use_focal_loss: Whether to use focal loss for handling class imbalance
+        initial_bias: Initial bias value for output layer
+        extra_regularization: Whether to add extra L2 regularization
         
     Returns:
-        Compiled model
+        A compiled model
     """
-    try:
-        # Validate inputs and set parameters
-        if num_classes <= 0:
-            raise ValueError(f"Invalid number of classes: {num_classes}")
-        
-        print(f"\nBuilding EfficientNet model with {num_classes} classes")
-        print(f"Multi-label: {multi_label}, Using focal loss: {use_focal_loss}")
-        
-        # Set image data format for consistency
-        K = tf.keras.backend
-        K.set_image_data_format('channels_last')
-        
-        # Define input shape - standard for medical imaging tasks
-        input_shape = (224, 224, 3)
-        
-        # Create input layer with explicit name
-        inputs = tf.keras.layers.Input(shape=input_shape, name='model_input')
-        
-        # Add preprocessing layer (normalize pixel values)
-        x = tf.keras.layers.Rescaling(1./255)(inputs)
-        
-        # Load EfficientNetB0 as base model without top layers and weights from ImageNet
-        base_model = tf.keras.applications.EfficientNetB0(
-            include_top=False,
-            weights='imagenet',
-            input_shape=input_shape,
-            pooling=None  # No pooling here, we'll add it later
-        )
-        
-        # Freeze base model for initial training
-        base_model.trainable = False
-        
-        # Apply the base model to our input
-        x = base_model(x)
-        
-        # Add global average pooling to reduce parameters
-        x = tf.keras.layers.GlobalAveragePooling2D(name='pooling_layer')(x)
-        
-        # Add dropout for regularization
-        x = tf.keras.layers.Dropout(0.3, name='dropout_1')(x)
-        
-        # Add a dense layer with batch normalization and activation
-        x = tf.keras.layers.Dense(512, name='dense_1')(x)
-        x = tf.keras.layers.BatchNormalization(name='bn_1')(x)
-        x = tf.keras.layers.Activation('relu', name='act_1')(x)
-        
-        # Add more dropout for better regularization
-        x = tf.keras.layers.Dropout(0.4, name='dropout_2')(x)
-        
-        # Output layer with special initialization to prevent class collapse
-        if multi_label:
-            # For multi-label, use sigmoid activations (independent classes)
-            # Use special initial bias to prevent class collapse
-            # Calculate initial bias based on assumed class frequency
-            # Usually rare classes in dermatology datasets
-            initial_bias = np.log([0.05] * num_classes)  # Assume 5% prevalence for each class
-            
-            outputs = tf.keras.layers.Dense(
-                num_classes, 
-                activation='sigmoid',
-                name='output',
-                bias_initializer=tf.keras.initializers.Constant(initial_bias),
-                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
-            )(x)
-            
-            # For multi-label, always use binary cross-entropy
-            if use_focal_loss:
-                def focal_loss(gamma=2., alpha=4.):
-                    def focal_loss_fixed(y_true, y_pred):
-                        pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
-                        pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
-                        
-                        # Clip to prevent NaN's and Inf's
-                        pt_1 = tf.clip_by_value(pt_1, 1e-7, 1.0 - 1e-7)
-                        pt_0 = tf.clip_by_value(pt_0, 1e-7, 1.0 - 1e-7)
-                        
-                        return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1)) - K.sum((1 - alpha) * K.pow(pt_0, gamma) * K.log(1. - pt_0))
-                    return focal_loss_fixed
-                
-                loss = focal_loss(gamma=2, alpha=0.8)
-                print("Using Focal Loss for multi-label classification")
-            else:
-                loss = 'binary_crossentropy'
-                print("Using Binary Cross Entropy for multi-label classification")
-        else:
-            # For single-label, use softmax activation (mutually exclusive classes)
-            # Apply special initialization strategy to prevent dominant class issue
-            outputs = tf.keras.layers.Dense(
-                num_classes, 
-                activation='softmax',
-                name='output',
-                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42),
-                # Balanced initial bias for all classes
-                bias_initializer=tf.keras.initializers.Constant(0.0)
-            )(x)
-            
-            # For single-label classification
-            if use_focal_loss and num_classes > 1:
-                def categorical_focal_loss(gamma=2., alpha=.25):
-                    """
-                    Categorical version of Focal Loss for addressing class imbalance.
-                    :param gamma: Focusing parameter for modulating loss for hard examples
-                    :param alpha: Balancing parameter for addressing class imbalance
-                    """
-                    def categorical_focal_loss_fixed(y_true, y_pred):
-                        # Clip prediction values to prevent log(0) errors
-                        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
-                        
-                        # Standard cross-entropy calculation
-                        cross_entropy = -tf.reduce_sum(y_true * tf.math.log(y_pred), axis=-1)
-                        
-                        # Calculate focal weights
-                        # When y_true is one-hot encoded, this picks out the predicted prob of the true class
-                        probs = tf.reduce_sum(y_true * y_pred, axis=-1)
-                        
-                        # Apply gamma focusing parameter
-                        focal_weights = tf.pow(1.0 - probs, gamma)
-                        
-                        # Apply the weights to cross-entropy
-                        weighted_cross_entropy = focal_weights * cross_entropy
-                        
-                        return tf.reduce_mean(weighted_cross_entropy)
-                    
-                    return categorical_focal_loss_fixed
-                
-                loss = categorical_focal_loss(gamma=2.0, alpha=0.25)
-                print("Using Categorical Focal Loss for single-label classification")
-            else:
-                loss = 'categorical_crossentropy'
-                print("Using Categorical Cross Entropy for single-label classification")
-        
-        # Compile metrics - ensure they are function references, not strings
-        metrics = [
-            tf.keras.metrics.BinaryAccuracy(name='accuracy') if multi_label else tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
-            tf.keras.metrics.AUC(name='auc', multi_label=multi_label),
+    # Create the base model - using EfficientNetB0 instead of InceptionResNetV2 to avoid GPU MaxPool gradient errors
+    base_model = tf.keras.applications.EfficientNetB0(
+        include_top=False,
+        weights='imagenet',
+        input_shape=(224, 224, 3),
+        pooling='avg'
+    )
+    
+    # Freeze the base model layers
+    for layer in base_model.layers:
+        layer.trainable = False
+    
+    # Create input layer
+    inputs = tf.keras.layers.Input(shape=(224, 224, 3))
+    
+    # Apply preprocessing - use EfficientNet preprocessing to match the base model
+    x = tf.keras.applications.efficientnet.preprocess_input(inputs)
+    
+    # Pass through the base model
+    x = base_model(x)
+    
+    # Add a few layers on top of the base model
+    # Add regularization if requested
+    reg = tf.keras.regularizers.l2(0.001) if extra_regularization else None
+    
+    x = tf.keras.layers.Dense(512, activation='relu', kernel_regularizer=reg)(x)
+    x = tf.keras.layers.Dropout(0.3)(x)
+    x = tf.keras.layers.Dense(256, activation='relu', kernel_regularizer=reg)(x)
+    x = tf.keras.layers.Dropout(0.3)(x)
+    
+    # Output layer with appropriate activation
+    if multi_label:
+        activation = 'sigmoid'
+    else:
+        activation = 'softmax'
+    
+    # Apply initial bias to output layer
+    output_bias = None
+    if initial_bias is not None:
+        output_bias = tf.keras.initializers.Constant(initial_bias)
+    
+    outputs = tf.keras.layers.Dense(
+        num_classes, 
+        activation=activation,
+        bias_initializer=output_bias,
+        kernel_regularizer=reg
+    )(x)
+    
+    # Create the model
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    
+    # Compile the model with appropriate loss function
+    if use_focal_loss:
+        loss = focal_loss(gamma=2.0, alpha=0.25)
+    elif multi_label:
+        loss = 'binary_crossentropy'
+    else:
+        loss = 'categorical_crossentropy'
+    
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+        loss=loss,
+        metrics=[
+            'accuracy',
+            tf.keras.metrics.AUC(name='auc'),
             tf.keras.metrics.Precision(name='precision'),
             tf.keras.metrics.Recall(name='recall')
         ]
-        
-        # Create and compile model
-        model = tf.keras.Model(inputs=inputs, outputs=outputs, name="EfficientNet_PEFT")
-        
-        # Compile with appropriate optimizer and loss
-        model.compile(
-            optimizer=tf.keras.optimizers.AdamW(
-                learning_rate=1e-3,
-                weight_decay=1e-5,
-                beta_1=0.9,
-                beta_2=0.999,
-                epsilon=1e-07
-            ),
-            loss=loss,
-            metrics=metrics
-        )
-        
-        # Print model summary
-        model.summary()
-        
-        print(f"Model built successfully with {model.count_params():,} parameters")
-        print(f"Base model frozen with {base_model.count_params():,} parameters")
-        
-        return model
-        
-    except Exception as e:
-        print(f"Error in build_peft_model: {str(e)}")
-        traceback.print_exc()
-        # Add fully connected layer with careful initialization
-        x = tf.keras.layers.Dense(
-            512,
-            activation='relu',
-            kernel_initializer=tf.keras.initializers.HeUniform(seed=42),
-            bias_initializer='zeros',
-            kernel_regularizer=tf.keras.regularizers.l2(1e-5),
-            name='fc_layer'
-        )(x)
-        
-        # Add batch normalization for training stability
-        x = tf.keras.layers.BatchNormalization()(x)
-        
-        # Add another dropout layer
-        x = tf.keras.layers.Dropout(0.5)(x)
-        
-        # Output layer with neutral bias initialization (critical to avoid class collapse)
-        if multi_label:
-            activation = 'sigmoid'
-            loss = 'binary_crossentropy'
-        else:
-            activation = 'softmax'
-            loss = 'sparse_categorical_crossentropy'
-        
-        # Set bias initialization to zeros to avoid class collapse
-        outputs = tf.keras.layers.Dense(
-            num_classes,
-            activation=activation,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42),
-            bias_initializer='zeros',  # Neutral bias to prevent collapse to dominant class
-            name='output'
-        )(x)
-        
-        # Create the model
-        model = tf.keras.Model(inputs=inputs, outputs=outputs, name="EfficientNet_SkinLesion")
-        
-        # Define focal loss if requested
-        if use_focal_loss:
-            print(f"Using Focal Loss for {'multi' if multi_label else 'single'}-label classification")
-            
-            def focal_loss(gamma=2.0, alpha=0.25):
-                def focal_loss_fixed(y_true, y_pred):
-                    epsilon = 1e-7
-                    y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
-                    
-                    # For sparse categorical format (single-label), convert to one-hot
-                    if not multi_label and len(tf.shape(y_true)) == 1:
-                        y_true = tf.one_hot(tf.cast(y_true, dtype=tf.int32), depth=num_classes)
-                    
-                    # Calculate cross entropy
-                    cross_entropy = -y_true * tf.math.log(y_pred)
-                    
-                    # Calculate focal weight
-                    p_t = tf.exp(-cross_entropy)
-                    # Add the alpha weighing factor
-                    alpha_factor = y_true * alpha + (1-y_true) * (1-alpha)
-                    focal_weight = alpha_factor * tf.pow((1-p_t), gamma)
-                    
-                    # Calculate focal loss
-                    focal_loss = focal_weight * cross_entropy
-                    
-                    # Sum over classes and average over samples
-                    return tf.reduce_mean(tf.reduce_sum(focal_loss, axis=-1))
-                
-                return focal_loss_fixed
-            
-            loss = focal_loss(gamma=2.0, alpha=0.25)
-            
-        # Compile model with appropriate optimizer and metrics
-        optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=1e-3,
-            weight_decay=1e-4,
-            beta_1=0.9,
-            beta_2=0.999,
-            epsilon=1e-07
-        )
-        
-        # Separate function references for metrics to avoid sample_weight issues
-        accuracy_metric = tf.keras.metrics.BinaryAccuracy() if multi_label else tf.keras.metrics.SparseCategoricalAccuracy()
-        auc_metric = tf.keras.metrics.AUC(multi_label=multi_label, name='auc')
-        precision_metric = tf.keras.metrics.Precision(name='precision')
-        recall_metric = tf.keras.metrics.Recall(name='recall')
-        
-        model.compile(
-            optimizer=optimizer,
-            loss=loss,
-            metrics=[
-                accuracy_metric,
-                auc_metric,
-                precision_metric,
-                recall_metric
-            ]
-        )
-        
-        # Print model summary for debugging
-        model.summary()
-        
-        return model
-        
-    except Exception as e:
-        print(f"Error building model: {str(e)}")
-        traceback.print_exc()
-        return None
+    )
+    
+    return model
 
 # Add this function to help import in train.py
 def get_fixed_train_functions():
     """Returns the fixed training functions"""
-    return train_model, fine_tune_model, build_peft_model 
+    return train_model, fine_tune_model, build_peft_model, focal_loss

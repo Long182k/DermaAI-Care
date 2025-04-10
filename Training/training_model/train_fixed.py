@@ -12,6 +12,7 @@ from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset,
 from src.model_training import setup_gpu, log_model_to_mlflow, TimeoutCallback
 from src.model_training_fixed import train_model, fine_tune_model, build_peft_model  # Import the fixed functions
 from src.evaluate_model import evaluate_model
+from src.model_utils import calculate_adaptive_thresholds, apply_adaptive_thresholds, correct_bias, detect_prediction_bias, calculate_class_weights
 
 # Define model save paths
 MODEL_SAVE_PATH = "/kaggle/working/DermaAI-Care/Training/training_model/models/skin_cancer_prediction_model.keras"
@@ -66,12 +67,14 @@ def get_adaptive_thresholds(class_weights, base_threshold=0.5):
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train skin lesion classification model')
-    parser.add_argument('--csv_path', type=str, default='/kaggle/input/annotated-isic-2019-images/ISIC_2019_Labeled_GroundTruth.csv',
+    parser.add_argument('--csv_path', type=str, default='/kaggle/input/isic-2019-labeled/ISIC_2019_Labeled_GroundTruth.csv',
                         help='Path to CSV file with image metadata')
-    parser.add_argument('--image_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/isic-2019-labeled/isic-2019-labeled/images',
+    parser.add_argument('--image_dir', type=str, default='/kaggle/input/isic-2019-labeled/isic-2019-labeled/isic-2019-labeled/images',
                         help='Directory containing detected images')
-    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/isic-2019-labeled/isic-2019-labeled/labels',
+    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/isic-2019-labeled/isic-2019-labeled/isic-2019-labeled/labels',
                         help='Directory containing YOLO label files')
+    parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/isic-2019-labeled/ISIC_2019_Labeled_Metadata.csv",
+                       help='Path to CSV file with patient metadata (age, sex, anatomical site)')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for training')
     parser.add_argument('--epochs', type=int, default=50,
@@ -101,8 +104,6 @@ def main():
                         help='Path to save the trained model')
     parser.add_argument('--multi_label', action='store_true', default=True,
                         help='Use multi-label classification')
-    parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/annotated-isic-2019-images/ISIC_2019_Labeled_Metadata.csv",
-                       help='Path to CSV file with patient metadata (age, sex, anatomical site)')
     parser.add_argument('--use_metadata', action='store_true',
                        help='Whether to use patient metadata (age, sex, anatomical site)')
     parser.add_argument('--focal_loss', action='store_true', default=True,
@@ -168,12 +169,19 @@ def main():
         model = build_peft_model(
             n_classes, 
             multi_label=args.multi_label, 
-            use_focal_loss=args.focal_loss
+            use_focal_loss=args.focal_loss,
+            initial_bias=args.initial_bias,  # Add initial bias parameter
+            extra_regularization=args.extra_regularization  # Add regularization parameter
         )
         
         if model is None:
             print("Failed to build model. Exiting.")
             return
+            
+        # Apply bias correction to account for class imbalance
+        if class_weights:
+            print("Applying bias correction to account for class imbalance...")
+            model = correct_bias(model, class_weights, layer_name='dense_2')  # Use the last dense layer name
         
         # Print model summary
         model.summary()
@@ -247,7 +255,7 @@ def main():
                     # For custom generators (like keras.utils.Sequence), use indexing
                     test_batch_x, test_batch_y = val_generator[0]
                 
-                preds = model.predict(test_batch_x)
+                preds = model.predict(test_batch_x,test_batch_y)
                 preds_classes = np.argmax(preds, axis=1) if preds.shape[1] > 1 else (preds > 0.5).astype(int)
                 print("Prediction class distribution (sample):")
                 for cls in range(min(preds.shape[1], 9)):
@@ -307,17 +315,61 @@ def main():
                 print(f"Error during fine-tuning: {fine_tune_error}")
                 traceback.print_exc()
         
-        # Generate custom prediction thresholds based on class weights
-        prediction_thresholds = get_adaptive_thresholds(class_weights, base_threshold=0.35)
-        
-        # Adjust thresholds further for very rare classes
-        # Lower thresholds for rare classes to increase recall
-        if class_weights:
-            for class_idx, weight in class_weights.items():
-                # Identify very rare classes
-                if weight > 2 * np.mean(list(class_weights.values())):
-                    # Use an even lower threshold
-                    prediction_thresholds[class_idx] = max(0.15, prediction_thresholds.get(class_idx, 0.35) - 0.1)
+        # Generate custom prediction thresholds using model_utils function
+        prediction_thresholds = {}
+        if args.balance_thresholds:
+            print("Generating predictions for adaptive threshold calculation...")
+            # Get validation data predictions for threshold calculation
+            val_data_sample = []
+            val_labels_sample = []
+            
+            # Get a representative sample from validation data
+            sample_size = min(500, len(val_generator) * val_generator.batch_size)
+            samples_collected = 0
+            
+            for i in range(min(20, len(val_generator))):
+                if samples_collected >= sample_size:
+                    break
+                try:
+                    batch_x, batch_y = val_generator[i]
+                    val_data_sample.append(batch_x)
+                    val_labels_sample.append(batch_y)
+                    samples_collected += len(batch_x)
+                except Exception as e:
+                    print(f"Error collecting validation sample: {e}")
+                    continue
+            
+            if val_data_sample:
+                val_data_sample = np.vstack(val_data_sample)
+                val_labels_sample = np.vstack(val_labels_sample)
+                
+                # Get predictions
+                val_preds = model.predict(val_data_sample, verbose=1)
+                
+                # Calculate adaptive thresholds using model_utils function
+                print("Calculating adaptive thresholds based on validation data...")
+                thresholds = calculate_adaptive_thresholds(
+                    val_labels_sample, val_preds, 
+                    class_weights=class_weights, 
+                    method='pr'  # Use precision-recall curve for imbalanced data
+                )
+                
+                # Convert to dictionary
+                prediction_thresholds = {i: float(thresholds[i]) for i in range(len(thresholds))}
+                
+                # Ensure very rare classes have lower thresholds
+                if class_weights:
+                    for class_idx, weight in class_weights.items():
+                        # Identify very rare classes
+                        if weight > 2 * np.mean(list(class_weights.values())):
+                            # Use an even lower threshold
+                            prediction_thresholds[class_idx] = max(0.15, prediction_thresholds.get(class_idx, 0.35) - 0.1)
+            else:
+                # Fallback to the original method if we couldn't get validation samples
+                prediction_thresholds = get_adaptive_thresholds(class_weights, base_threshold=0.35)
+        else:
+            # Use default threshold for all classes if not balancing
+            prediction_thresholds = {i: 0.5 for i in range(n_classes)}
         
         print(f"Using custom prediction thresholds: {prediction_thresholds}")
         
@@ -346,7 +398,8 @@ def main():
             test_generator=val_generator,
             class_names=eval_class_names,
             output_dir=eval_dir,
-            prediction_thresholds=prediction_thresholds
+            prediction_thresholds=prediction_thresholds,
+            use_weighted_metrics=args.weighted_metrics  # Add weighted metrics parameter
         )
         
         # Print metrics
@@ -397,4 +450,4 @@ def main():
         return None
 
 if __name__ == "__main__":
-    main() 
+    main()

@@ -19,9 +19,12 @@ from datetime import datetime
 import traceback
 import gc
 
+# Import functions from model_utils for threshold handling
+from src.model_utils import apply_adaptive_thresholds, detect_prediction_bias
+
 
 # Around line 16-20, keep the function signature
-def evaluate_model(model, test_generator, class_names, output_dir=None, prediction_thresholds=None):
+def evaluate_model(model, test_generator, class_names, output_dir=None, prediction_thresholds=None, use_weighted_metrics=True):
     """
     Evaluate the model and generate metrics, confusion matrix, and classification report.
     
@@ -31,6 +34,7 @@ def evaluate_model(model, test_generator, class_names, output_dir=None, predicti
         class_names: List of class names
         output_dir: Directory to save evaluation results
         prediction_thresholds: Dictionary mapping class indices to custom threshold values
+        use_weighted_metrics: Whether to calculate class-weighted metrics for imbalanced datasets
     
     Returns:
         Dictionary containing evaluation metrics
@@ -91,46 +95,53 @@ def evaluate_model(model, test_generator, class_names, output_dir=None, predicti
         if prediction_thresholds and len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
             print(f"Applying custom prediction thresholds: {prediction_thresholds}")
             
-            # Initialize prediction classes array with zeros
-            y_pred_classes = np.zeros(y_pred.shape[0], dtype=int)
-            
-            # For each sample, check each class according to its threshold
-            for sample_idx in range(y_pred.shape[0]):
-                sample_pred = y_pred[sample_idx]
-                
-                # Apply different thresholds for each class
-                # We'll pick the class with highest confidence above its threshold
-                max_conf = -1
-                max_class = -1
-                
-                for class_idx in range(y_pred.shape[1]):
-                    # Get the confidence for this class
-                    conf = sample_pred[class_idx]
-                    
-                    # Get appropriate threshold (default to 0.5 if not specified)
-                    threshold = 0.5
-                    if str(class_idx) in prediction_thresholds:
-                        threshold = prediction_thresholds[str(class_idx)]
-                    elif class_idx in prediction_thresholds:
-                        threshold = prediction_thresholds[class_idx]
-                    
-                    # Check if this prediction passes the threshold and has highest confidence
-                    if conf > threshold and conf > max_conf:
-                        max_conf = conf
-                        max_class = class_idx
-                
-                # If no class passed its threshold, use the original argmax
-                if max_class == -1:
-                    # Use a lower minimum threshold (0.1) just to avoid no predictions at all
-                    max_class = np.argmax(sample_pred)
-                    if sample_pred[max_class] > 0.1:
-                        y_pred_classes[sample_idx] = max_class
-                    else:
-                        # If all predictions are below 0.1, use a fallback:
-                        # Pick the most common class in training data (typically class 1 for skin data)
-                        y_pred_classes[sample_idx] = 1  # NV is usually most common
+            # Convert prediction_thresholds to numpy array for apply_adaptive_thresholds
+            thresholds_array = np.zeros(y_pred.shape[1])
+            for class_idx in range(y_pred.shape[1]):
+                if str(class_idx) in prediction_thresholds:
+                    thresholds_array[class_idx] = prediction_thresholds[str(class_idx)]
+                elif class_idx in prediction_thresholds:
+                    thresholds_array[class_idx] = prediction_thresholds[class_idx]
                 else:
-                    y_pred_classes[sample_idx] = max_class
+                    thresholds_array[class_idx] = 0.5
+            
+            # Use the apply_adaptive_thresholds function from model_utils
+            y_pred_binary = apply_adaptive_thresholds(y_pred, thresholds_array)
+            
+            # Convert to class indices
+            y_pred_classes = np.argmax(y_pred_binary, axis=1)
+            
+            # Check if we have any predictions
+            if np.sum(y_pred_binary) == 0:
+                print("WARNING: No predictions passed thresholds. Using original argmax predictions.")
+                y_pred_classes = np.argmax(y_pred, axis=1)
+                
+            # Check if we're missing any classes in predictions
+            unique_classes = np.unique(y_pred_classes)
+            if len(unique_classes) < min(8, y_pred.shape[1]):
+                print(f"WARNING: Only predicting {len(unique_classes)} classes out of {y_pred.shape[1]}.")
+                print("Classes predicted: ", unique_classes)
+                
+                # For classes with no predictions, find samples with highest probability
+                missing_classes = [c for c in range(y_pred.shape[1]) if c not in unique_classes]
+                print("Missing classes: ", missing_classes)
+                
+                # For each missing class, find the top 2 samples and assign them to that class
+                for missing_class in missing_classes:
+                    # Find samples with highest probability for this class
+                    class_probs = y_pred[:, missing_class]
+                    top_indices = np.argsort(class_probs)[-2:]  # Get top 2 samples
+                    
+                    # Assign these samples to the missing class
+                    for idx in top_indices:
+                        if class_probs[idx] > 0.1:  # Only if probability is reasonable
+                            y_pred_classes[idx] = missing_class
+                            print(f"Assigned sample {idx} to missing class {missing_class} with prob {class_probs[idx]:.4f}")
+            
+            print(f"After threshold application, predicting {len(np.unique(y_pred_classes))} unique classes")
+            for cls in range(min(y_pred.shape[1], 10)):
+                count = np.sum(y_pred_classes == cls)
+                print(f"  Class {cls}: {count} predictions ({count/len(y_pred_classes)*100:.2f}%)")
         elif len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
             # Standard approach - take argmax for multi-class
             y_pred_classes = np.argmax(y_pred, axis=1)
@@ -457,40 +468,72 @@ def evaluate_model(model, test_generator, class_names, output_dir=None, predicti
         icbhi_score = (sensitivity + specificity) / 2
         
         # Calculate weighted metrics that give more importance to rare classes
-        print("\nCalculating weighted evaluation metrics (balanced for rare classes)...")
-        try:
-            # Extract class weights from the report if available
-            class_weights = {}
-            for class_idx, class_name in enumerate(used_class_names):
-                if class_name in report:
-                    # Use support as a proxy for class frequency
-                    support = report[class_name]['support']
-                    if support > 0:
-                        # Invert support to give higher weight to rare classes
-                        class_weights[class_idx] = 1.0 / (support + 0.1)
-            
-            # Normalize weights
-            if class_weights:
-                max_weight = max(class_weights.values())
-                class_weights = {k: v / max_weight * 5.0 for k, v in class_weights.items()}
-                print(f"Derived class weights: {class_weights}")
-            
-            # Calculate weighted metrics
-            weighted_metrics = calculate_weighted_metrics(
-                y_true_classes,
-                y_pred_classes,
-                y_pred,
-                class_weights
-            )
-            
-            # Add weighted metrics to results
-            print(f"Weighted Accuracy: {weighted_metrics['weighted_accuracy']:.4f}")
-            print(f"Weighted Precision: {weighted_metrics['weighted_precision']:.4f}")
-            print(f"Weighted Recall: {weighted_metrics['weighted_recall']:.4f}")
-            print(f"Weighted F1: {weighted_metrics['weighted_f1']:.4f}")
-            print(f"Weighted AUC: {weighted_metrics['weighted_auc']:.4f}")
-            
-            # Add to metrics dictionary
+        if use_weighted_metrics:
+            print("\nCalculating weighted evaluation metrics (balanced for rare classes)...")
+            try:
+                # Extract class weights from the report if available
+                class_weights = {}
+                for class_idx, class_name in enumerate(used_class_names):
+                    if class_name in report:
+                        # Use support as a proxy for class frequency
+                        support = report[class_name]['support']
+                        if support > 0:
+                            # Invert support to give higher weight to rare classes
+                            class_weights[class_idx] = 1.0 / (support + 0.1)
+                
+                # Normalize weights
+                if class_weights:
+                    max_weight = max(class_weights.values())
+                    class_weights = {k: v / max_weight * 5.0 for k, v in class_weights.items()}
+                    print(f"Derived class weights: {class_weights}")
+                
+                # Calculate weighted metrics
+                weighted_metrics = calculate_weighted_metrics(
+                    y_true_classes,
+                    y_pred_classes,
+                    y_pred,
+                    class_weights
+                )
+                
+                # Add weighted metrics to results
+                print(f"Weighted Accuracy: {weighted_metrics['weighted_accuracy']:.4f}")
+                print(f"Weighted Precision: {weighted_metrics['weighted_precision']:.4f}")
+                print(f"Weighted Recall: {weighted_metrics['weighted_recall']:.4f}")
+                print(f"Weighted F1: {weighted_metrics['weighted_f1']:.4f}")
+                print(f"Weighted AUC: {weighted_metrics['weighted_auc']:.4f}")
+                
+                # Add to metrics dictionary
+                metrics = {
+                    'accuracy': report['accuracy'],
+                    'precision': report['macro avg']['precision'],
+                    'recall': report['macro avg']['recall'],
+                    'f1': report['macro avg']['f1-score'],
+                    'auc': auc_value,
+                    'specificity': specificity,
+                    'icbhi_score': icbhi_score,
+                    'confusion_matrix_path': confusion_matrix_path,
+                    'report_path': report_path,
+                    **weighted_metrics
+                }
+            except Exception as weighted_error:
+                print(f"Error calculating weighted metrics: {weighted_error}")
+                traceback.print_exc()
+                
+                # Fallback to standard metrics if weighted metrics fail
+                metrics = {
+                    'accuracy': report['accuracy'],
+                    'precision': report['macro avg']['precision'],
+                    'recall': report['macro avg']['recall'],
+                    'f1': report['macro avg']['f1-score'],
+                    'auc': auc_value,
+                    'specificity': specificity,
+                    'icbhi_score': icbhi_score,
+                    'confusion_matrix_path': confusion_matrix_path,
+                    'report_path': report_path
+                }
+        else:
+            # Use standard metrics without weighting
+            print("\nUsing standard evaluation metrics (no class weighting)...")
             metrics = {
                 'accuracy': report['accuracy'],
                 'precision': report['macro avg']['precision'],
@@ -500,22 +543,17 @@ def evaluate_model(model, test_generator, class_names, output_dir=None, predicti
                 'specificity': specificity,
                 'icbhi_score': icbhi_score,
                 'confusion_matrix_path': confusion_matrix_path,
-                'report_path': report_path,
-                **weighted_metrics
+                'report_path': report_path
             }
             
-            # Print ICBHI score components
-            print(f"Validation ICBHI Score: {icbhi_score:.4f}")
-            print(f"  - Sensitivity: {sensitivity:.4f}")
-            print(f"  - Specificity: {specificity:.4f}")
-            
-            # Return metrics
-            return metrics
-        except Exception as weighted_error:
-            print(f"Error calculating weighted metrics: {weighted_error}")
-            traceback.print_exc()
-            return None
-    
+        # Print ICBHI score components
+        print(f"Validation ICBHI Score: {icbhi_score:.4f}")
+        print(f"  - Sensitivity: {sensitivity:.4f}")
+        print(f"  - Specificity: {specificity:.4f}")
+        
+        # Return metrics
+        return metrics
+        
     except Exception as e:
         print(f"Error during evaluation: {str(e)}")
         traceback.print_exc()

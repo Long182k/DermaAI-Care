@@ -23,9 +23,11 @@
 /Training/linux_env/
 /Training/__pycache__/
 /Training/training_model/src/__pycache__/
-/Training/training_model/src/best.pt
+# /Training/training_model/src/best.pt
+/Training/training_model/src/*.pt
 /Training/training_model/src/annotated_images/
-/Training/training_model/src/skin_cancer_prediction_model.keras
+# /Training/training_model/src/skin_cancer_prediction_model.keras
+/Training/training_model/src/*.keras
 /Training/image_processing/__pycache__/
 /Training/*.pyc
 /Training/*.pyo

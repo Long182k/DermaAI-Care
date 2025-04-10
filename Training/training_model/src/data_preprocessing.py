@@ -335,7 +335,7 @@ def load_yolo_detections(
 
 def create_yolo_generators(csv_path, image_dir, labels_dir, batch_size=32, min_samples_per_class=5,
                          n_folds=5, fold_idx=0, seed=42, augmentation_strength='medium',
-                         metadata_csv_path=None):
+                         metadata_csv_path=None, balance_classes=True):
     """
     Create data generators for YOLO format data with optimized tf.data pipeline
     
@@ -350,6 +350,7 @@ def create_yolo_generators(csv_path, image_dir, labels_dir, batch_size=32, min_s
         seed: Random seed for reproducibility
         augmentation_strength: Strength of data augmentation ('low', 'medium', 'high')
         metadata_csv_path: Path to CSV file with patient metadata
+        balance_classes: Whether to apply class balancing techniques
     
     Returns:
         train_generator, val_generator, diagnosis_to_idx, n_classes, n_folds, class_weights
@@ -358,75 +359,44 @@ def create_yolo_generators(csv_path, image_dir, labels_dir, batch_size=32, min_s
         # Set data format explicitly
         tf.keras.backend.set_image_data_format('channels_last')
         
-        # Load and preprocess data
-        df = pd.read_csv(csv_path)
+        # Load YOLO detections with metadata if provided
+        print(f"Loading YOLO detections from {labels_dir} with metadata: {metadata_csv_path if metadata_csv_path else 'None'}")
+        df_processed, diagnosis_to_idx = load_yolo_detections(
+            image_dir=image_dir, 
+            labels_dir=labels_dir, 
+            csv_path=csv_path,
+            min_samples_per_class=min_samples_per_class,
+            n_folds=n_folds,
+            metadata_csv_path=metadata_csv_path
+        )
         
-        print(f"Loaded CSV with columns: {df.columns.tolist()}")
+        n_classes = len(diagnosis_to_idx)
+        print(f"Found {n_classes} classes after filtering (min samples: {min_samples_per_class})")
         
-        # Determine ID column - could be 'image_id', 'image', or other
-        id_column = None
-        for col in ['image_id', 'image', 'isic_id', 'id']:
-            if col in df.columns:
-                id_column = col
-                break
-        
-        if id_column is None:
-            # If no ID column found, create one from the first column
-            df['image_id'] = df.iloc[:, 0]
-            id_column = 'image_id'
-            print(f"No ID column found, using first column '{df.columns[0]}' as image_id")
-        
-        # Determine diagnosis column - could be 'dx', 'diagnosis', or we need to use multi-label columns
-        dx_column = None
-        for col in ['dx', 'diagnosis', 'class']:
-            if col in df.columns:
-                dx_column = col
-                break
-        
-        # Check if we're dealing with multi-label ISIC format
-        isic_classes = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC', 'UNK']
-        isic_format = all(col in df.columns for col in isic_classes[:3])  # Check at least a few classes exist
-        
-        if isic_format:
-            print("Detected ISIC 2019 multi-label format")
+        # Calculate class weights for imbalanced data if balance_classes is True
+        if balance_classes:
+            print("Calculating class weights for balanced training...")
+            # Extract targets for class weight calculation
+            targets = np.array([x for x in df_processed['target']])
+            class_counts = np.sum(targets, axis=0)
+            total_samples = len(df_processed)
             
-            # For multi-label, create a dummy 'dx' column with the highest probability class
-            class_columns = [col for col in isic_classes if col in df.columns]
+            class_weights = {}
+            for i in range(n_classes):
+                count = class_counts[i]
+                if count > 0:
+                    class_weights[i] = total_samples / (n_classes * count)
+                else:
+                    class_weights[i] = 1.0
             
-            # Create a new column with the class that has the highest probability
-            df['dx'] = df[class_columns].idxmax(axis=1)
-            dx_column = 'dx'
-            
-            # Create mapping for diagnosis to index
-            diagnosis_to_idx = {label: i for i, label in enumerate(class_columns)}
-            n_classes = len(diagnosis_to_idx)
-            
-            # Use one-hot encoding for targets
-            # Create a new column with multi-hot encoding for all diagnoses
-            df['target'] = df.apply(lambda row: [row[col] for col in class_columns], axis=1)
-            
-            print(f"Created multi-label targets from columns: {class_columns}")
-        elif dx_column:
-            # Single label classification
-            diagnosis_to_idx = {d: i for i, d in enumerate(sorted(df[dx_column].unique()))}
-            n_classes = len(diagnosis_to_idx)
-            
-            # One-hot encode the diagnoses
-            df['target'] = df[dx_column].apply(lambda x: tf.keras.utils.to_categorical(
-                diagnosis_to_idx[x], num_classes=n_classes).tolist())
+            # Print class weights for debugging
+            print("Class weights:")
+            for class_idx, weight in class_weights.items():
+                class_name = next((name for name, idx in diagnosis_to_idx.items() if idx == class_idx), f"Class {class_idx}")
+                print(f"  {class_name}: {weight:.3f}")
         else:
-            raise ValueError("Could not determine diagnosis column. Please check your CSV format.")
-        
-        print(f"Found {n_classes} classes: {diagnosis_to_idx}")
-        
-        # Calculate class weights for imbalanced data
-        if dx_column:
-            class_counts = df[dx_column].value_counts()
-            total_samples = len(df)
-            class_weights = {i: total_samples / (n_classes * count) 
-                            for i, count in enumerate(class_counts)}
-        else:
-            # For multi-label, use a default weight of 1.0 for all classes
+            # Use equal weights if not balancing classes
+            print("Using equal class weights (no balancing)...")
             class_weights = {i: 1.0 for i in range(n_classes)}
         
         # Create stratified k-fold split for better cross-validation
@@ -434,119 +404,38 @@ def create_yolo_generators(csv_path, image_dir, labels_dir, batch_size=32, min_s
         kf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
         
         # For stratification, use the class with highest probability in multi-label case
-        if isic_format:
-            stratify_column = df['dx']
-        else:
-            stratify_column = df[dx_column]
-            
-        fold_indices = list(kf.split(df, stratify_column))
+        # Create a stratification column based on the argmax of the target
+        df_processed['stratify_col'] = df_processed['target'].apply(lambda x: np.argmax(x))
+        
+        fold_indices = list(kf.split(df_processed, df_processed['stratify_col']))
         
         # Get train and validation indices for the current fold
         train_idx, val_idx = fold_indices[fold_idx]
-        train_df = df.iloc[train_idx].reset_index(drop=True)
-        val_df = df.iloc[val_idx].reset_index(drop=True)
+        train_df = df_processed.iloc[train_idx].reset_index(drop=True)
+        val_df = df_processed.iloc[val_idx].reset_index(drop=True)
         
         print(f"Training on {len(train_df)} samples, validating on {len(val_df)} samples")
         
-        # Define augmentation functions
-        def parse_image(img_path, label):
-            # Load and preprocess the image
-            img = tf.io.read_file(img_path)
-            img = tf.image.decode_jpeg(img, channels=3)
-            img = tf.image.resize(img, [224, 224])
-            img = tf.cast(img, tf.float32) / 255.0
-            return img, label
+        # Create generators using the YOLODetectionGenerator class with the specified augmentation strength
+        train_generator = YOLODetectionGenerator(
+            dataframe=train_df,
+            diagnosis_to_idx=diagnosis_to_idx,
+            batch_size=batch_size,
+            is_training=True,
+            seed=seed,
+            augmentation_strength=augmentation_strength
+        )
         
-        def augment(image, label):
-            # Data augmentation
-            image = tf.image.random_flip_left_right(image)
-            image = tf.image.random_brightness(image, 0.1)
-            image = tf.image.random_contrast(image, 0.9, 1.1)
-            
-            # Apply rotation
-            angle = tf.random.uniform([], -0.2, 0.2)
-            image = tf.image.rot90(image, k=tf.cast(angle * 2, tf.int32))
-            
-            return image, label
+        val_generator = YOLODetectionGenerator(
+            dataframe=val_df,
+            diagnosis_to_idx=diagnosis_to_idx,
+            batch_size=batch_size,
+            is_training=False,
+            seed=seed,
+            augmentation_strength='low'  # Use minimal augmentation for validation
+        )
         
-        # Create training dataset
-        train_img_paths = []
-        for img_id in train_df[id_column]:
-            # Try different file extensions
-            for ext in ['.jpg', '.jpeg', '.png']:
-                path = os.path.join(image_dir, f"{img_id}{ext}")
-                if os.path.exists(path):
-                    train_img_paths.append(path)
-                    break
-            else:
-                # If no file found, use a default path and hope it exists
-                train_img_paths.append(os.path.join(image_dir, f"{img_id}.jpg"))
-        
-        train_labels = train_df['target'].tolist()
-        
-        train_dataset = tf.data.Dataset.from_tensor_slices((train_img_paths, train_labels))
-        train_dataset = train_dataset.map(parse_image, num_parallel_calls=tf.data.AUTOTUNE)
-        train_dataset = train_dataset.map(augment, num_parallel_calls=tf.data.AUTOTUNE)
-        train_dataset = train_dataset.batch(batch_size)
-        train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
-        
-        # Create validation dataset
-        val_img_paths = []
-        for img_id in val_df[id_column]:
-            # Try different file extensions
-            for ext in ['.jpg', '.jpeg', '.png']:
-                path = os.path.join(image_dir, f"{img_id}{ext}")
-                if os.path.exists(path):
-                    val_img_paths.append(path)
-                    break
-            else:
-                # If no file found, use a default path and hope it exists
-                val_img_paths.append(os.path.join(image_dir, f"{img_id}.jpg"))
-        
-        val_labels = val_df['target'].tolist()
-        
-        val_dataset = tf.data.Dataset.from_tensor_slices((val_img_paths, val_labels))
-        val_dataset = val_dataset.map(parse_image, num_parallel_calls=tf.data.AUTOTUNE)
-        val_dataset = val_dataset.batch(batch_size)
-        val_dataset = val_dataset.prefetch(tf.data.AUTOTUNE)
-        
-        # For compatibility with the existing code
-        class DatasetWrapper:
-            def __init__(self, dataset, n_samples, batch_size, n_classes):
-                self.dataset = dataset
-                self.n_samples = n_samples
-                self.batch_size = batch_size
-                self.n_classes = n_classes
-                self.class_indices = {v: k for k, v in diagnosis_to_idx.items()}
-            
-            def __len__(self):
-                return self.n_samples // self.batch_size
-            
-            def __getitem__(self, idx):
-                # This is just a placeholder to maintain compatibility
-                # The actual data comes from the dataset
-                return None, None
-
-        # Check if any image paths exist before proceeding
-        sample_train_path = train_img_paths[0] if train_img_paths else None
-        sample_val_path = val_img_paths[0] if val_img_paths else None
-        
-        if not sample_train_path or not os.path.exists(sample_train_path):
-            print(f"Warning: Sample train image path does not exist: {sample_train_path}")
-            print(f"Image directory: {image_dir}")
-            print(f"Sample ID: {train_df[id_column].iloc[0]}")
-        else:
-            print(f"Verified train image path exists: {sample_train_path}")
-            
-        if not sample_val_path or not os.path.exists(sample_val_path):
-            print(f"Warning: Sample val image path does not exist: {sample_val_path}")
-        else:
-            print(f"Verified val image path exists: {sample_val_path}")
-        
-        train_wrapper = DatasetWrapper(train_dataset, len(train_df), batch_size, n_classes)
-        val_wrapper = DatasetWrapper(val_dataset, len(val_df), batch_size, n_classes)
-        
-        return train_dataset, val_dataset, diagnosis_to_idx, n_classes, n_folds, class_weights
+        return train_generator, val_generator, diagnosis_to_idx, n_classes, n_folds, class_weights
         
     except Exception as e:
         print(f"Error creating data generators: {e}")
@@ -644,8 +533,8 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir, metadata_csv_path=None
 
 # Usage example:
 if __name__ == "__main__":
-    CSV_PATH = "/kaggle/input/annotated-isic-2019-images/ISIC_2019_Labeled_GroundTruth.csv"
-    IMAGE_DIR = "/kaggle/input/annotated-isic-2019-images/isic-2019-labeled/isic-2019-labeled/images"
+    CSV_PATH = "/kaggle/input/isic-2019-labeled/ISIC_2019_Labeled_GroundTruth.csv"
+    IMAGE_DIR = "/kaggle/input/isic-2019-labeled/isic-2019-labeled/isic-2019-labeled/images"
 
     # Analyze dataset
     dataset_stats = analyze_dataset(CSV_PATH)

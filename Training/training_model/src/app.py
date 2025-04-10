@@ -28,7 +28,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Path configurations - Update these paths for your environment
 script_dir = os.path.dirname(os.path.abspath(__file__))
 YOLO_MODEL_PATH = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/training_model/src/best.pt"
-CLASSIFICATION_MODEL_PATH = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/training_model/src/skin_cancer_prediction_model.keras"
+CLASSIFICATION_MODEL_PATH = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/training_model/src/skin_cancer_prediction_model_10_Apr.keras"
 DETECTION_OUTPUT_DIR = "/Users/drake/Documents/UWE/IT PROJECT/Code/DermaAI-Care/Training/training_model/src/annotated_images/annotated_images"
 
 # Global variables for detection output directory

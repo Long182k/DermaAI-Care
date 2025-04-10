@@ -292,70 +292,229 @@ def evaluate_model(model, test_generator, class_names, output_dir=None, predicti
                     auc_value = roc_auc_score(y_true[:, 1], y_pred[:, 1])
                 else:
                     # True multi-class problem
-                    if np.max(y_true_classes) < y_pred.shape[1]:
-                        # Check if we have enough classes in the true labels
-                        auc_value = roc_auc_score(
-                            tf.keras.utils.to_categorical(y_true_classes, num_classes=y_pred.shape[1]), 
-                            y_pred, 
-                            multi_class='ovr', 
-                            average='weighted'
-                        )
+                    # Create one-hot encoded true labels
+                    y_true_onehot = tf.keras.utils.to_categorical(y_true_classes, num_classes=y_pred.shape[1])
+                    
+                    # Compute class-wise AUC scores
+                    auc_per_class = []
+                    valid_classes = []
+                    
+                    print("\nCalculating AUC per class:")
+                    for i in range(y_pred.shape[1]):
+                        if i < len(class_names):
+                            class_name = class_names[i]
+                        else:
+                            class_name = f"Class_{i}"
+                            
+                        # Check if class exists in true labels
+                        if np.sum(y_true_onehot[:, i]) > 0:
+                            try:
+                                # Calculate AUC for this class (one-vs-rest)
+                                class_auc = roc_auc_score(y_true_onehot[:, i], y_pred[:, i])
+                                auc_per_class.append(class_auc)
+                                valid_classes.append(i)
+                                print(f"  Class {i} ({class_name}): AUC = {class_auc:.4f}")
+                            except Exception as class_auc_error:
+                                print(f"  Error calculating AUC for class {i} ({class_name}): {class_auc_error}")
+                        else:
+                            print(f"  Class {i} ({class_name}): No positive samples, skipping AUC calculation")
+                    
+                    # Calculate weighted average AUC if we have valid classes
+                    if auc_per_class:
+                        # Get class frequencies for weighting
+                        class_counts = np.sum(y_true_onehot[:, valid_classes], axis=0)
+                        total_samples = np.sum(class_counts)
+                        
+                        # Calculate weighted AUC
+                        if total_samples > 0:
+                            weights = class_counts / total_samples
+                            auc_value = np.average(auc_per_class, weights=weights)
+                            print(f"Weighted-average AUC: {auc_value:.4f}")
+                        else:
+                            # Simple average if no weighting possible
+                            auc_value = np.mean(auc_per_class)
+                            print(f"Simple-average AUC: {auc_value:.4f}")
                     else:
-                        print("Warning: Class mismatch between predictions and true labels. Using fallback AUC calculation.")
-                        # Fallback AUC calculation
-                        auc_value = 0.5  # Default value
+                        # Fallback if no valid AUC calculations were possible
+                        print("No valid classes for AUC calculation. Using default value of 0.5.")
+                        auc_value = 0.5
             else:
                 # Binary problem with single output
                 auc_value = roc_auc_score(y_true, y_pred)
+                print(f"Binary AUC: {auc_value:.4f}")
         except Exception as auc_error:
             print(f"Error calculating AUC: {auc_error}")
-            auc_value = 0.5  # Default fallback
-            
+            # Instead of defaulting to 0.5, try a different approach
+            try:
+                # Try calculating AUC with macro-averaging using scikit-learn's built-in support
+                print("Attempting alternative AUC calculation...")
+                if len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
+                    y_true_onehot = tf.keras.utils.to_categorical(y_true_classes, num_classes=y_pred.shape[1])
+                    
+                    # Try with OvR strategy explicitly
+                    try:
+                        auc_value = roc_auc_score(y_true_onehot, y_pred, average='macro', multi_class='ovr')
+                        print(f"Alternative AUC calculation successful: {auc_value:.4f}")
+                    except:
+                        # If still failing, check if prediction diversity issue
+                        unique_pred_classes = np.unique(np.argmax(y_pred, axis=1))
+                        if len(unique_pred_classes) == 1:
+                            print(f"Only one class predicted ({unique_pred_classes[0]}). AUC undefined.")
+                            auc_value = 0.5  # Default fallback
+                        else:
+                            # Last resort - pairwise comparison for most common classes
+                            print("Attempting pairwise AUC calculation for common classes...")
+                            common_classes = []
+                            for cls in range(y_pred.shape[1]):
+                                if np.sum(y_true_classes == cls) >= 5:  # At least 5 samples
+                                    common_classes.append(cls)
+                            
+                            if len(common_classes) >= 2:
+                                pair_aucs = []
+                                for i in range(len(common_classes)):
+                                    for j in range(i+1, len(common_classes)):
+                                        class_i = common_classes[i]
+                                        class_j = common_classes[j]
+                                        
+                                        # Get only samples from these two classes
+                                        mask = np.logical_or(y_true_classes == class_i, y_true_classes == class_j)
+                                        if np.sum(mask) >= 10:  # Need enough samples
+                                            # Binarize for this pair
+                                            y_true_binary = (y_true_classes[mask] == class_i).astype(int)
+                                            y_pred_binary = y_pred[mask][:, class_i] / (y_pred[mask][:, class_i] + y_pred[mask][:, class_j])
+                                            
+                                            try:
+                                                pair_auc = roc_auc_score(y_true_binary, y_pred_binary)
+                                                pair_aucs.append(pair_auc)
+                                                print(f"Pair {class_i} vs {class_j} AUC: {pair_auc:.4f}")
+                                            except:
+                                                pass
+                            
+                                if pair_aucs:
+                                    auc_value = np.mean(pair_aucs)
+                                    print(f"Mean pairwise AUC: {auc_value:.4f}")
+                                else:
+                                    auc_value = 0.5
+                            else:
+                                auc_value = 0.5
+                else:
+                    # For binary case
+                    auc_value = 0.5  # Default fallback
+            except Exception as alt_auc_error:
+                print(f"Alternative AUC calculation failed: {alt_auc_error}")
+                auc_value = 0.5  # Default fallback
+        
         # Calculate sensitivity (recall) and specificity
         # Sensitivity is already calculated as recall
         sensitivity = report['macro avg']['recall']
         
-        # Specificity calculation
+        # Improved specificity calculation with handling for edge cases
         specificity = 0
         spec_scores = []
         
         # Calculate specificity for each class
-        for i in range(len(used_class_indices)):
-            true_negatives = np.sum((y_true_classes != used_class_indices[i]) & (y_pred_classes != used_class_indices[i]))
-            false_positives = np.sum((y_true_classes != used_class_indices[i]) & (y_pred_classes == used_class_indices[i]))
+        print("\nCalculating specificity per class:")
+        for i, class_idx in enumerate(used_class_indices):
+            # Create one-vs-rest binary mask for this class
+            true_positives = np.sum((y_true_classes == class_idx) & (y_pred_classes == class_idx))
+            true_negatives = np.sum((y_true_classes != class_idx) & (y_pred_classes != class_idx))
+            false_positives = np.sum((y_true_classes != class_idx) & (y_pred_classes == class_idx))
+            false_negatives = np.sum((y_true_classes == class_idx) & (y_pred_classes != class_idx))
             
+            # Calculate class metrics
             if true_negatives + false_positives > 0:
                 class_specificity = true_negatives / (true_negatives + false_positives)
-                spec_scores.append(class_specificity)
             else:
-                spec_scores.append(0)
+                class_specificity = 0
+            
+            # Store for averaging
+            spec_scores.append(class_specificity)
+            
+            # Print class specificity
+            if i < len(used_class_names):
+                print(f"  Class {class_idx} ({used_class_names[i]}): Specificity = {class_specificity:.4f}, TNR = {true_negatives}/{true_negatives + false_positives}")
         
-        # Macro-average specificity
-        specificity = np.mean(spec_scores) if spec_scores else 0
+        # Weighted specificity calculation (weighted by class frequency)
+        class_counts = np.bincount(y_true_classes, minlength=max(used_class_indices)+1)[used_class_indices]
+        total_samples = np.sum(class_counts)
+        
+        if total_samples > 0:
+            # Weighted average based on class frequency
+            weights = class_counts / total_samples
+            weighted_specificity = np.sum(weights * np.array(spec_scores))
+            print(f"Weighted-average specificity: {weighted_specificity:.4f}")
+            
+            # Also calculate macro-average (equal weighting)
+            macro_specificity = np.mean(spec_scores)
+            print(f"Macro-average specificity: {macro_specificity:.4f}")
+            
+            # Use class-weighted specificity for better balance
+            specificity = weighted_specificity
+        else:
+            specificity = np.mean(spec_scores) if spec_scores else 0
         
         # Calculate ICBHI score (average of sensitivity and specificity)
         icbhi_score = (sensitivity + specificity) / 2
         
-        # Compile all metrics
-        metrics = {
-            'accuracy': report['accuracy'],
-            'precision': report['macro avg']['precision'],
-            'recall': report['macro avg']['recall'],
-            'f1': report['macro avg']['f1-score'],
-            'auc': auc_value,
-            'specificity': specificity,
-            'icbhi_score': icbhi_score,
-            'confusion_matrix_path': confusion_matrix_path,
-            'report_path': report_path
-        }
-        
-        # Print ICBHI score components
-        print(f"Validation ICBHI Score: {icbhi_score:.4f}")
-        print(f"  - Sensitivity: {sensitivity:.4f}")
-        print(f"  - Specificity: {specificity:.4f}")
-        
-        # Return metrics
-        return metrics
+        # Calculate weighted metrics that give more importance to rare classes
+        print("\nCalculating weighted evaluation metrics (balanced for rare classes)...")
+        try:
+            # Extract class weights from the report if available
+            class_weights = {}
+            for class_idx, class_name in enumerate(used_class_names):
+                if class_name in report:
+                    # Use support as a proxy for class frequency
+                    support = report[class_name]['support']
+                    if support > 0:
+                        # Invert support to give higher weight to rare classes
+                        class_weights[class_idx] = 1.0 / (support + 0.1)
+            
+            # Normalize weights
+            if class_weights:
+                max_weight = max(class_weights.values())
+                class_weights = {k: v / max_weight * 5.0 for k, v in class_weights.items()}
+                print(f"Derived class weights: {class_weights}")
+            
+            # Calculate weighted metrics
+            weighted_metrics = calculate_weighted_metrics(
+                y_true_classes,
+                y_pred_classes,
+                y_pred,
+                class_weights
+            )
+            
+            # Add weighted metrics to results
+            print(f"Weighted Accuracy: {weighted_metrics['weighted_accuracy']:.4f}")
+            print(f"Weighted Precision: {weighted_metrics['weighted_precision']:.4f}")
+            print(f"Weighted Recall: {weighted_metrics['weighted_recall']:.4f}")
+            print(f"Weighted F1: {weighted_metrics['weighted_f1']:.4f}")
+            print(f"Weighted AUC: {weighted_metrics['weighted_auc']:.4f}")
+            
+            # Add to metrics dictionary
+            metrics = {
+                'accuracy': report['accuracy'],
+                'precision': report['macro avg']['precision'],
+                'recall': report['macro avg']['recall'],
+                'f1': report['macro avg']['f1-score'],
+                'auc': auc_value,
+                'specificity': specificity,
+                'icbhi_score': icbhi_score,
+                'confusion_matrix_path': confusion_matrix_path,
+                'report_path': report_path,
+                **weighted_metrics
+            }
+            
+            # Print ICBHI score components
+            print(f"Validation ICBHI Score: {icbhi_score:.4f}")
+            print(f"  - Sensitivity: {sensitivity:.4f}")
+            print(f"  - Specificity: {specificity:.4f}")
+            
+            # Return metrics
+            return metrics
+        except Exception as weighted_error:
+            print(f"Error calculating weighted metrics: {weighted_error}")
+            traceback.print_exc()
+            return None
     
     except Exception as e:
         print(f"Error during evaluation: {str(e)}")
@@ -554,3 +713,98 @@ def plot_confusion_matrix(y_true, y_pred, class_names, output_path, class_indice
     except Exception as e:
         print(f"Error plotting confusion matrix: {e}")
         traceback.print_exc()
+
+# Function to calculate weighted metrics based on class frequencies
+def calculate_weighted_metrics(y_true, y_pred, y_pred_proba, class_weights=None):
+    """
+    Calculate weighted evaluation metrics that better handle class imbalance
+    
+    Args:
+        y_true: Ground truth labels
+        y_pred: Predicted class labels
+        y_pred_proba: Predicted class probabilities
+        class_weights: Optional dictionary of class weights
+        
+    Returns:
+        Dictionary of weighted metrics
+    """
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+    
+    # Calculate class frequencies for weighting if not provided
+    if class_weights is None:
+        # Count occurrences of each class
+        classes, counts = np.unique(y_true, return_counts=True)
+        total = len(y_true)
+        
+        # Invert frequencies to give more weight to rare classes
+        freqs = counts / total
+        weights = {cls: 1.0 / (freq + 0.1) for cls, freq in zip(classes, freqs)}
+        
+        # Normalize weights to have average of 1.0
+        avg_weight = sum(weights.values()) / len(weights)
+        class_weights = {cls: w / avg_weight for cls, w in weights.items()}
+    
+    # Create sample weights array based on class weights
+    sample_weights = np.ones(len(y_true))
+    for i, label in enumerate(y_true):
+        if label in class_weights:
+            sample_weights[i] = class_weights[label]
+    
+    # Calculate sample-weighted metrics
+    weighted_accuracy = accuracy_score(y_true, y_pred, sample_weight=sample_weights)
+    
+    # Convert to one-hot encoding for multi-class metrics if needed
+    if len(np.unique(y_true)) > 2:
+        from sklearn.preprocessing import OneHotEncoder
+        encoder = OneHotEncoder(sparse=False)
+        y_true_onehot = encoder.fit_transform(y_true.reshape(-1, 1))
+        
+        # Calculate AUC score with weights
+        try:
+            weighted_auc = roc_auc_score(
+                y_true_onehot, 
+                y_pred_proba, 
+                sample_weight=sample_weights,
+                multi_class='ovr',
+                average='weighted'
+            )
+        except Exception as e:
+            print(f"Error calculating weighted AUC: {e}")
+            weighted_auc = 0.5
+    else:
+        # Binary case
+        try:
+            weighted_auc = roc_auc_score(y_true, y_pred_proba[:, 1], sample_weight=sample_weights)
+        except Exception as e:
+            print(f"Error calculating weighted AUC: {e}")
+            weighted_auc = 0.5
+    
+    # Calculate other weighted metrics
+    weighted_precision = precision_score(
+        y_true, y_pred, 
+        average='weighted', 
+        sample_weight=sample_weights,
+        zero_division=0
+    )
+    
+    weighted_recall = recall_score(
+        y_true, y_pred, 
+        average='weighted', 
+        sample_weight=sample_weights,
+        zero_division=0
+    )
+    
+    weighted_f1 = f1_score(
+        y_true, y_pred, 
+        average='weighted', 
+        sample_weight=sample_weights,
+        zero_division=0
+    )
+    
+    return {
+        'weighted_accuracy': weighted_accuracy,
+        'weighted_precision': weighted_precision,
+        'weighted_recall': weighted_recall,
+        'weighted_f1': weighted_f1,
+        'weighted_auc': weighted_auc
+    }

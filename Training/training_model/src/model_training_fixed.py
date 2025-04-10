@@ -113,248 +113,453 @@ def train_model(model, train_generator, val_generator, epochs=50, batch_size=32,
         traceback.print_exc()
         return None
 
-def fine_tune_model(model, train_generator, val_generator, epochs=5, learning_rate=5e-6, 
-                   class_weights=None, callbacks=None, batch_size=32, verbose=1,
-                   model_save_path=None):
+def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epochs=5, batch_size=32, class_weights=None, early_stopping=10, reduce_lr=5, fine_tune_lr=1e-5, callbacks=None):
     """
-    Fine-tune the model with improved layer unfreezing strategy and learning rate scheduling
+    Fine-tune a pre-trained model for skin lesion classification with careful layer unfreezing
+    
+    Args:
+        model: Pre-trained model to fine-tune
+        train_generator: Generator for training data
+        val_generator: Generator for validation data
+        diagnosis_to_idx: Mapping of diagnosis names to indices
+        epochs: Number of epochs for fine-tuning
+        batch_size: Batch size for training
+        class_weights: Weights for each class to handle imbalance
+        early_stopping: Number of epochs to wait before early stopping
+        reduce_lr: Number of epochs to wait before reducing learning rate
+        fine_tune_lr: Learning rate for fine-tuning (default: 1e-5)
+        callbacks: List of callbacks for model training
+    
+    Returns:
+        Fine-tuned model
     """
     try:
-        # Evaluate the model before fine-tuning to establish baseline
-        print("Evaluating base model performance before fine-tuning...")
-        base_metrics = model.evaluate(val_generator, verbose=1)
-        print(f"Base model metrics: {dict(zip(model.metrics_names, base_metrics))}")
+        print("\n=== Starting Fine-tuning Process ===")
         
-        # Create a new model for fine-tuning
-        fine_tuned_model = tf.keras.models.clone_model(model)
-        fine_tuned_model.set_weights(model.get_weights())
+        # === First, evaluate the model to see its baseline performance ===
+        print("\nEvaluating model before fine-tuning...")
+        eval_results = model.evaluate(val_generator, verbose=1)
+        metric_names = model.metrics_names
+        print("Baseline model performance:")
+        for name, value in zip(metric_names, eval_results):
+            print(f" - {name}: {value:.4f}")
         
-        # Print model architecture for debugging
-        fine_tuned_model.summary()
+        # === Check for prediction bias ===
+        print("\nAnalyzing prediction distribution before fine-tuning...")
         
-        # Fine-tune with careful layer unfreezing
-        print("Creating fine-tuning model by selectively unfreezing layers...")
+        # Get a batch of validation data
+        if isinstance(val_generator, tf.data.Dataset):
+            # For tf.data.Dataset, iterate to get the first batch
+            for x_test, y_test in val_generator.take(1):
+                break
+        else:
+            # For other generators, use indexing
+            x_test, y_test = val_generator[0]
         
-        # Find the base model within the model architecture
-        # Identify the EfficientNet base model layer
-        base_model_layer = None
-        for layer in fine_tuned_model.layers:
-            if isinstance(layer, tf.keras.Model):
-                base_model_layer = layer
+        # Get predictions
+        preds = model.predict(x_test)
+        
+        # Display class distribution
+        if len(preds.shape) > 1 and preds.shape[1] > 1:  # Multi-class
+            class_preds = np.argmax(preds, axis=1)
+            class_counts = np.bincount(class_preds, minlength=len(diagnosis_to_idx))
+            class_names = {v: k for k, v in diagnosis_to_idx.items()}
+            print("Prediction class distribution:")
+            for i, count in enumerate(class_counts):
+                class_name = class_names.get(i, f"Class {i}")
+                print(f" - {class_name}: {count} predictions ({count/len(class_preds)*100:.1f}%)")
+            
+            # Check if predictions are biased to one class
+            max_class_ratio = np.max(class_counts) / len(class_preds)
+            if max_class_ratio > 0.9:
+                print(f"WARNING: Model predictions are biased towards a single class ({max_class_ratio:.2f} ratio)")
+                print("Will apply extra class balancing during fine-tuning")
+        
+        # === Prepare for fine-tuning ===
+        # Create enhanced class weights with stronger emphasis on rare classes
+        if class_weights is not None:
+            print("\nEnhancing class weights for fine-tuning...")
+            enhanced_weights = {}
+            for class_idx, weight in class_weights.items():
+                # Further emphasize rare classes during fine-tuning
+                # Formula: enhanced_weight = original_weight^0.75 * 1.5 if weight > 1
+                if weight > 1:
+                    enhanced_weights[class_idx] = weight**0.75 * 1.5
+                else:
+                    enhanced_weights[class_idx] = weight
+            
+            # Print the enhanced weights
+            original_sum = sum(class_weights.values())
+            enhanced_sum = sum(enhanced_weights.values())
+            print("Original vs Enhanced class weights:")
+            for class_idx in class_weights:
+                class_name = {v: k for k, v in diagnosis_to_idx.items()}.get(class_idx, f"Class {class_idx}")
+                print(f" - {class_name}: {class_weights[class_idx]:.2f} → {enhanced_weights[class_idx]:.2f}")
+            
+            # Use the enhanced weights for fine-tuning
+            class_weights = enhanced_weights
+        
+        # === Set up fine-tuning of the model ===
+        print("\nPreparing the model for fine-tuning...")
+        
+        # Carefully unfreeze layers for fine-tuning
+        base_model = None
+        for layer in model.layers:
+            if isinstance(layer, tf.keras.Model):  # Find the base model
+                base_model = layer
                 break
         
-        if base_model_layer:
-            # Freeze all base model layers first
-            base_model_layer.trainable = True
+        if base_model is not None:
+            print(f"Found base model: {base_model.name}")
             
-            # Freeze early layers, unfreeze later layers
-            # For EfficientNet, focus on the last few blocks
-            total_layers = len(base_model_layer.layers)
-            for i, layer in enumerate(base_model_layer.layers):
-                # Keep early layers frozen (up to 80% of the network)
-                if i < int(total_layers * 0.8):
+            # First, ensure all layers are still frozen
+            base_model.trainable = True
+            
+            # Count total layers in base model
+            total_layers = len(base_model.layers)
+            print(f"Total layers in base model: {total_layers}")
+            
+            # Only unfreeze the last 30% of layers (common strategy for EfficientNet)
+            # This is generally more effective than unfreezing everything
+            layers_to_unfreeze = int(total_layers * 0.3)
+            
+            # Keep early layers frozen, unfreeze later layers
+            for i, layer in enumerate(base_model.layers):
+                if i < (total_layers - layers_to_unfreeze):
                     layer.trainable = False
                 else:
-                    # For BatchNormalization layers, keep them frozen during fine-tuning
-                    if isinstance(layer, tf.keras.layers.BatchNormalization):
-                        layer.trainable = False
-                    else:
+                    layer.trainable = True
+                    print(f"Unfreezing layer: {layer.name}")
+        else:
+            # If we can't find the base model, carefully unfreeze layers 
+            # Check if there are trainable dense layers
+            dense_layers = [layer for layer in model.layers if 'dense' in layer.name.lower()]
+            if dense_layers:
+                print(f"Unfreezing dense layers for fine-tuning")
+                for layer in model.layers:
+                    if 'dense' in layer.name.lower() or 'batch_normalization' in layer.name.lower():
                         layer.trainable = True
+                        print(f"Unfreezing layer: {layer.name}")
+                    else:
+                        layer.trainable = False
+            else:
+                # If no specific layers found, set all to trainable as a fallback
+                print("No specific layers found for selective unfreezing. Setting model to trainable.")
+                model.trainable = True
         
-        # Make sure all dense layers are trainable
-        trainable_layers = []
-        for layer in fine_tuned_model.layers:
-            if isinstance(layer, tf.keras.layers.Dense):
-                layer.trainable = True
-                trainable_layers.append(layer.name)
+        # Print number of trainable parameters
+        trainable_count = np.sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])
+        non_trainable_count = np.sum([tf.keras.backend.count_params(w) for w in model.non_trainable_weights])
+        print(f"Trainable parameters: {trainable_count:,}")
+        print(f"Non-trainable parameters: {non_trainable_count:,}")
         
-        print(f"Layers unfrozen for fine-tuning: {trainable_layers}")
+        # === Recompile model with a lower learning rate for fine-tuning ===
+        print(f"\nRecompiling model with fine-tuning learning rate: {fine_tune_lr}")
         
-        if class_weights:
-            print(f"Using class weights for fine-tuning: {class_weights}")
+        # Get the current optimizer, loss, and metrics to preserve them
+        current_optimizer = model.optimizer
+        if hasattr(current_optimizer, 'learning_rate'):
+            # Create a new AdamW optimizer with the fine-tuning learning rate
+            optimizer = tf.keras.optimizers.AdamW(
+                learning_rate=fine_tune_lr,
+                weight_decay=1e-6,  # Lower weight decay for fine-tuning
+                beta_1=0.9,
+                beta_2=0.999,
+                epsilon=1e-07
+            )
+            print(f"Created new AdamW optimizer with learning rate {fine_tune_lr}")
+        else:
+            # Fallback optimizer if needed
+            optimizer = tf.keras.optimizers.Adam(learning_rate=fine_tune_lr)
+            print(f"Created new Adam optimizer with learning rate {fine_tune_lr}")
         
-        # Compile with appropriate metrics and loss
-        optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=learning_rate,
-            weight_decay=0.0001,
-            beta_1=0.9,
-            beta_2=0.999,
-            epsilon=1e-07
+        # Recompile with same loss and metrics but new optimizer
+        model.compile(
+            optimizer=optimizer,
+            loss=model.loss,
+            metrics=model.compiled_metrics._metrics  # Keep same metrics
         )
         
-        # Defined metrics that won't conflict with sample_weight
-        # The key issue is to use metrics that don't internally use sample_weight
+        # === Setup callbacks for fine-tuning ===
+        fine_tune_callbacks = []
+        
+        # Add early stopping with higher patience
+        fine_tune_callbacks.append(
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=early_stopping,
+                restore_best_weights=True,
+                verbose=1
+            )
+        )
+        
+        # Add ReduceLROnPlateau with more aggressive reduction
+        fine_tune_callbacks.append(
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,  # More aggressive reduction
+                patience=reduce_lr,
+                min_lr=1e-7,
+                verbose=1
+            )
+        )
+        
+        # Add custom user callbacks if provided
+        if callbacks:
+            fine_tune_callbacks.extend(callbacks)
+        
+        # === Fine-tune the model ===
+        print("\nStarting fine-tuning...")
+        
+        # Adjust batch size if needed (smaller batch size for fine-tuning)
+        if batch_size > 16:
+            effective_batch_size = 16  # Limit batch size for stable fine-tuning
+            print(f"Adjusting batch size from {batch_size} to {effective_batch_size} for stable fine-tuning")
+        else:
+            effective_batch_size = batch_size
+        
+        # Start fine-tuning
+        fine_tune_history = None
+        try:
+            fine_tune_history = model.fit(
+                train_generator,
+                epochs=epochs,
+                validation_data=val_generator,
+                class_weight=class_weights,
+                callbacks=fine_tune_callbacks,
+                batch_size=effective_batch_size,
+                verbose=1
+            )
+        except Exception as e:
+            print(f"Error during fine-tuning: {str(e)}")
+            traceback.print_exc()
+        
+        # === Evaluate the fine-tuned model ===
+        print("\nEvaluating fine-tuned model...")
+        final_eval = model.evaluate(val_generator, verbose=1)
+        print("Fine-tuned model performance:")
+        for name, value in zip(metric_names, final_eval):
+            print(f" - {name}: {value:.4f}")
+        
+        # === Check for prediction bias again ===
+        print("\nAnalyzing prediction distribution after fine-tuning...")
+        
+        # Use the same test batch we extracted earlier
+        new_preds = model.predict(x_test)
+        
+        # Display class distribution again
+        if len(new_preds.shape) > 1 and new_preds.shape[1] > 1:  # Multi-class
+            class_preds = np.argmax(new_preds, axis=1)
+            class_counts = np.bincount(class_preds, minlength=len(diagnosis_to_idx))
+            class_names = {v: k for k, v in diagnosis_to_idx.items()}
+            print("Prediction class distribution after fine-tuning:")
+            for i, count in enumerate(class_counts):
+                class_name = class_names.get(i, f"Class {i}")
+                print(f" - {class_name}: {count} predictions ({count/len(class_preds)*100:.1f}%)")
+        
+        # Return the fine-tuned model
+        return model
+        
+    except Exception as e:
+        print(f"Error in fine_tune_model: {str(e)}")
+        traceback.print_exc()
+        return model
+
+def build_peft_model(num_classes, multi_label=False, use_focal_loss=False):
+    """
+    Build an EfficientNet model with Parameter-Efficient Fine-Tuning (PEFT) approach.
+    
+    Args:
+        num_classes: Number of classes for classification
+        multi_label: Whether to use multi-label classification
+        use_focal_loss: Whether to use focal loss for class imbalance
+        
+    Returns:
+        Compiled model
+    """
+    try:
+        # Validate inputs and set parameters
+        if num_classes <= 0:
+            raise ValueError(f"Invalid number of classes: {num_classes}")
+        
+        print(f"\nBuilding EfficientNet model with {num_classes} classes")
+        print(f"Multi-label: {multi_label}, Using focal loss: {use_focal_loss}")
+        
+        # Set image data format for consistency
+        K = tf.keras.backend
+        K.set_image_data_format('channels_last')
+        
+        # Define input shape - standard for medical imaging tasks
+        input_shape = (224, 224, 3)
+        
+        # Create input layer with explicit name
+        inputs = tf.keras.layers.Input(shape=input_shape, name='model_input')
+        
+        # Add preprocessing layer (normalize pixel values)
+        x = tf.keras.layers.Rescaling(1./255)(inputs)
+        
+        # Load EfficientNetB0 as base model without top layers and weights from ImageNet
+        base_model = tf.keras.applications.EfficientNetB0(
+            include_top=False,
+            weights='imagenet',
+            input_shape=input_shape,
+            pooling=None  # No pooling here, we'll add it later
+        )
+        
+        # Freeze base model for initial training
+        base_model.trainable = False
+        
+        # Apply the base model to our input
+        x = base_model(x)
+        
+        # Add global average pooling to reduce parameters
+        x = tf.keras.layers.GlobalAveragePooling2D(name='pooling_layer')(x)
+        
+        # Add dropout for regularization
+        x = tf.keras.layers.Dropout(0.3, name='dropout_1')(x)
+        
+        # Add a dense layer with batch normalization and activation
+        x = tf.keras.layers.Dense(512, name='dense_1')(x)
+        x = tf.keras.layers.BatchNormalization(name='bn_1')(x)
+        x = tf.keras.layers.Activation('relu', name='act_1')(x)
+        
+        # Add more dropout for better regularization
+        x = tf.keras.layers.Dropout(0.4, name='dropout_2')(x)
+        
+        # Output layer with special initialization to prevent class collapse
+        if multi_label:
+            # For multi-label, use sigmoid activations (independent classes)
+            # Use special initial bias to prevent class collapse
+            # Calculate initial bias based on assumed class frequency
+            # Usually rare classes in dermatology datasets
+            initial_bias = np.log([0.05] * num_classes)  # Assume 5% prevalence for each class
+            
+            outputs = tf.keras.layers.Dense(
+                num_classes, 
+                activation='sigmoid',
+                name='output',
+                bias_initializer=tf.keras.initializers.Constant(initial_bias),
+                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
+            )(x)
+            
+            # For multi-label, always use binary cross-entropy
+            if use_focal_loss:
+                def focal_loss(gamma=2., alpha=4.):
+                    def focal_loss_fixed(y_true, y_pred):
+                        pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
+                        pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
+                        
+                        # Clip to prevent NaN's and Inf's
+                        pt_1 = tf.clip_by_value(pt_1, 1e-7, 1.0 - 1e-7)
+                        pt_0 = tf.clip_by_value(pt_0, 1e-7, 1.0 - 1e-7)
+                        
+                        return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1)) - K.sum((1 - alpha) * K.pow(pt_0, gamma) * K.log(1. - pt_0))
+                    return focal_loss_fixed
+                
+                loss = focal_loss(gamma=2, alpha=0.8)
+                print("Using Focal Loss for multi-label classification")
+            else:
+                loss = 'binary_crossentropy'
+                print("Using Binary Cross Entropy for multi-label classification")
+        else:
+            # For single-label, use softmax activation (mutually exclusive classes)
+            # Apply special initialization strategy to prevent dominant class issue
+            outputs = tf.keras.layers.Dense(
+                num_classes, 
+                activation='softmax',
+                name='output',
+                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42),
+                # Balanced initial bias for all classes
+                bias_initializer=tf.keras.initializers.Constant(0.0)
+            )(x)
+            
+            # For single-label classification
+            if use_focal_loss and num_classes > 1:
+                def categorical_focal_loss(gamma=2., alpha=.25):
+                    """
+                    Categorical version of Focal Loss for addressing class imbalance.
+                    :param gamma: Focusing parameter for modulating loss for hard examples
+                    :param alpha: Balancing parameter for addressing class imbalance
+                    """
+                    def categorical_focal_loss_fixed(y_true, y_pred):
+                        # Clip prediction values to prevent log(0) errors
+                        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+                        
+                        # Standard cross-entropy calculation
+                        cross_entropy = -tf.reduce_sum(y_true * tf.math.log(y_pred), axis=-1)
+                        
+                        # Calculate focal weights
+                        # When y_true is one-hot encoded, this picks out the predicted prob of the true class
+                        probs = tf.reduce_sum(y_true * y_pred, axis=-1)
+                        
+                        # Apply gamma focusing parameter
+                        focal_weights = tf.pow(1.0 - probs, gamma)
+                        
+                        # Apply the weights to cross-entropy
+                        weighted_cross_entropy = focal_weights * cross_entropy
+                        
+                        return tf.reduce_mean(weighted_cross_entropy)
+                    
+                    return categorical_focal_loss_fixed
+                
+                loss = categorical_focal_loss(gamma=2.0, alpha=0.25)
+                print("Using Categorical Focal Loss for single-label classification")
+            else:
+                loss = 'categorical_crossentropy'
+                print("Using Categorical Cross Entropy for single-label classification")
+        
+        # Compile metrics - ensure they are function references, not strings
         metrics = [
-            # Use functions instead of string names to avoid sample_weight conflicts
-            tf.keras.metrics.binary_accuracy,
-            tf.keras.metrics.AUC(name='auc', multi_label=True),
+            tf.keras.metrics.BinaryAccuracy(name='accuracy') if multi_label else tf.keras.metrics.CategoricalAccuracy(name='accuracy'),
+            tf.keras.metrics.AUC(name='auc', multi_label=multi_label),
             tf.keras.metrics.Precision(name='precision'),
             tf.keras.metrics.Recall(name='recall')
         ]
         
-        fine_tuned_model.compile(
-            optimizer=optimizer,
-            loss='binary_crossentropy',
+        # Create and compile model
+        model = tf.keras.Model(inputs=inputs, outputs=outputs, name="EfficientNet_PEFT")
+        
+        # Compile with appropriate optimizer and loss
+        model.compile(
+            optimizer=tf.keras.optimizers.AdamW(
+                learning_rate=1e-3,
+                weight_decay=1e-5,
+                beta_1=0.9,
+                beta_2=0.999,
+                epsilon=1e-07
+            ),
+            loss=loss,
             metrics=metrics
         )
         
-        # Use smaller batch size for stability
-        fine_tune_batch_size = min(16, batch_size)
+        # Print model summary
+        model.summary()
         
-        # Create checkpointing
-        if model_save_path:
-            checkpoint_path = os.path.join(os.path.dirname(model_save_path), 'fine_tuned_model_best.keras')
-        else:
-            checkpoint_path = 'models/fine_tuned_model_best.keras'
+        print(f"Model built successfully with {model.count_params():,} parameters")
+        print(f"Base model frozen with {base_model.count_params():,} parameters")
         
-        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        
-        # Set up callbacks with better learning rate scheduling
-        if callbacks is None:
-            callbacks = [
-                # Early stopping
-                tf.keras.callbacks.EarlyStopping(
-                    monitor='val_loss',
-                    patience=8,
-                    restore_best_weights=True,
-                    verbose=1
-                ),
-                # Save best model
-                tf.keras.callbacks.ModelCheckpoint(
-                    filepath=checkpoint_path,
-                    monitor='val_loss',
-                    save_best_only=True,
-                    verbose=1
-                ),
-                # Reduce learning rate
-                tf.keras.callbacks.ReduceLROnPlateau(
-                    monitor='val_loss',
-                    factor=0.5,
-                    patience=3,
-                    min_lr=1e-7,
-                    verbose=1
-                )
-            ]
-        
-        # Train with class weights but handle sample_weight conflict
-        # Convert class weights to sample weights manually if needed
-        if class_weights and hasattr(train_generator, 'compute_sample_weights'):
-            # Use custom function if available
-            sample_weights = train_generator.compute_sample_weights(class_weights)
-            history = fine_tuned_model.fit(
-                train_generator,
-                validation_data=val_generator,
-                epochs=epochs,
-                callbacks=callbacks,
-                batch_size=fine_tune_batch_size,
-                verbose=verbose
-            )
-        else:
-            # Regular training with class weights
-            try:
-                history = fine_tuned_model.fit(
-                    train_generator,
-                    validation_data=val_generator,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    class_weight=class_weights,
-                    batch_size=fine_tune_batch_size,
-                    verbose=verbose
-                )
-            except TypeError as e:
-                # If class_weight causes an error, try without it
-                print(f"Error using class_weight: {e}")
-                print("Continuing fine-tuning without class weights...")
-                history = fine_tuned_model.fit(
-                    train_generator,
-                    validation_data=val_generator,
-                    epochs=epochs,
-                    callbacks=callbacks,
-                    batch_size=fine_tune_batch_size,
-                    verbose=verbose
-                )
-        
-        # Save the fine-tuned model
-        if model_save_path:
-            fine_tuned_model_path = os.path.join(os.path.dirname(model_save_path), 'fine_tuned_model.keras')
-            fine_tuned_model.save(fine_tuned_model_path)
-            print(f"Fine-tuned model saved to: {fine_tuned_model_path}")
-        
-        return fine_tuned_model, history
+        return model
         
     except Exception as e:
-        print(f"Error during fine-tuning: {str(e)}")
+        print(f"Error in build_peft_model: {str(e)}")
         traceback.print_exc()
-        return None, None
-
-def build_peft_model(num_classes, multi_label=False, use_focal_loss=False):
-    """
-    Build a PEFT model with improved architecture and class handling
-    
-    Args:
-        num_classes: Number of output classes
-        multi_label: Whether to use multi-label classification
-        use_focal_loss: Whether to use focal loss for handling class imbalance
-    """
-    try:
-        # Validate number of classes
-        if num_classes <= 0:
-            raise ValueError(f"Invalid number of classes: {num_classes}")
-        print(f"Building model with {num_classes} classes, multi_label={multi_label}, focal_loss={use_focal_loss}")
-        
-        # Set image data format explicitly
-        tf.keras.backend.set_image_data_format('channels_last')
-        
-        # Create base model with proper input shape
-        base_model = tf.keras.applications.EfficientNetB0(
-            include_top=False,
-            weights='imagenet',
-            input_shape=(224, 224, 3)
-        )
-        
-        # Freeze the base model initially
-        base_model.trainable = False
-        
-        # Create attention mechanism to focus on relevant parts of the image
-        input_layer = tf.keras.Input(shape=(224, 224, 3), name='input_layer_1')
-        x = base_model(input_layer)
-        
-        # Add attention mechanism (CBAM-inspired)
-        attention = tf.keras.layers.Conv2D(1, kernel_size=1)(x)
-        attention = tf.keras.layers.Activation('sigmoid', name='activation')(attention)
-        x = tf.keras.layers.Multiply()([x, attention])
-        
-        # Global pooling
-        x = tf.keras.layers.GlobalAveragePooling2D()(x)
-        
-        # Batch normalization helps with internal covariate shift
-        x = tf.keras.layers.BatchNormalization()(x)
-        
-        # Add classification head with proper initialization
-        # 512-unit dense layer
+        # Add fully connected layer with careful initialization
         x = tf.keras.layers.Dense(
             512,
             activation='relu',
-            kernel_initializer='he_normal',
-            kernel_regularizer=tf.keras.regularizers.l1_l2(l1=1e-5, l2=1e-4),
-            name='dense'
+            kernel_initializer=tf.keras.initializers.HeUniform(seed=42),
+            bias_initializer='zeros',
+            kernel_regularizer=tf.keras.regularizers.l2(1e-5),
+            name='fc_layer'
         )(x)
+        
+        # Add batch normalization for training stability
         x = tf.keras.layers.BatchNormalization()(x)
+        
+        # Add another dropout layer
         x = tf.keras.layers.Dropout(0.5)(x)
         
-        # 256-unit dense layer
-        x = tf.keras.layers.Dense(
-            256,
-            activation='relu',
-            kernel_initializer='he_normal',
-            kernel_regularizer=tf.keras.regularizers.l1_l2(l1=1e-5, l2=1e-4),
-            name='dense_1'
-        )(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-        x = tf.keras.layers.Dropout(0.3)(x)
-        
-        # Output layer with proper initialization
-        # For multi-label, use sigmoid activation
+        # Output layer with neutral bias initialization (critical to avoid class collapse)
         if multi_label:
             activation = 'sigmoid'
             loss = 'binary_crossentropy'
@@ -362,77 +567,78 @@ def build_peft_model(num_classes, multi_label=False, use_focal_loss=False):
             activation = 'softmax'
             loss = 'sparse_categorical_crossentropy'
         
+        # Set bias initialization to zeros to avoid class collapse
         outputs = tf.keras.layers.Dense(
             num_classes,
             activation=activation,
-            kernel_initializer='glorot_uniform',
-            kernel_regularizer=tf.keras.regularizers.l2(1e-4),
-            bias_initializer='zeros',
-            name='dense_2'
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42),
+            bias_initializer='zeros',  # Neutral bias to prevent collapse to dominant class
+            name='output'
         )(x)
         
-        model = tf.keras.Model(inputs=input_layer, outputs=outputs, name="EfficientNet_SkinLesion")
+        # Create the model
+        model = tf.keras.Model(inputs=inputs, outputs=outputs, name="EfficientNet_SkinLesion")
         
-        # Use Focal Loss for better handling of class imbalance when requested
-        if use_focal_loss and multi_label:
-            print("Using Focal Loss for multi-label classification")
+        # Define focal loss if requested
+        if use_focal_loss:
+            print(f"Using Focal Loss for {'multi' if multi_label else 'single'}-label classification")
+            
             def focal_loss(gamma=2.0, alpha=0.25):
                 def focal_loss_fixed(y_true, y_pred):
-                    # Clip prediction values to prevent extreme loss values
                     epsilon = 1e-7
-                    y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
+                    y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+                    
+                    # For sparse categorical format (single-label), convert to one-hot
+                    if not multi_label and len(tf.shape(y_true)) == 1:
+                        y_true = tf.one_hot(tf.cast(y_true, dtype=tf.int32), depth=num_classes)
+                    
+                    # Calculate cross entropy
+                    cross_entropy = -y_true * tf.math.log(y_pred)
+                    
+                    # Calculate focal weight
+                    p_t = tf.exp(-cross_entropy)
+                    # Add the alpha weighing factor
+                    alpha_factor = y_true * alpha + (1-y_true) * (1-alpha)
+                    focal_weight = alpha_factor * tf.pow((1-p_t), gamma)
                     
                     # Calculate focal loss
-                    cross_entropy = -y_true * tf.math.log(y_pred)
-                    weight = tf.pow(1. - y_pred, gamma) * y_true
-                    loss = alpha * weight * cross_entropy
+                    focal_loss = focal_weight * cross_entropy
                     
-                    # Sum over all classes
-                    return tf.reduce_sum(loss, axis=-1)
+                    # Sum over classes and average over samples
+                    return tf.reduce_mean(tf.reduce_sum(focal_loss, axis=-1))
+                
                 return focal_loss_fixed
             
             loss = focal_loss(gamma=2.0, alpha=0.25)
-        elif use_focal_loss and not multi_label:
-            print("Using Focal Loss for single-label classification")
-            # Focal loss for categorical (single-label) classification
-            def categorical_focal_loss(gamma=2.0, alpha=0.25):
-                def focal_loss_fixed(y_true, y_pred):
-                    # Clip prediction values
-                    epsilon = 1e-7
-                    y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-                    
-                    # For sparse categorical format, convert to one-hot
-                    if len(tf.shape(y_true)) == 1:
-                        y_true = tf.one_hot(tf.cast(y_true, dtype=tf.int32), depth=num_classes)
-                    
-                    # Calculate focal loss
-                    cross_entropy = -tf.reduce_sum(y_true * tf.math.log(y_pred), axis=-1)
-                    weight = tf.pow(1. - tf.reduce_sum(y_true * y_pred, axis=-1), gamma)
-                    focal_loss = alpha * weight * cross_entropy
-                    return focal_loss
-                return focal_loss_fixed
             
-            loss = categorical_focal_loss(gamma=2.0, alpha=0.25)
-        else:
-            print(f"Using standard {'binary_crossentropy' if multi_label else 'sparse_categorical_crossentropy'} loss")
-            
-        # Compile with appropriate metrics
+        # Compile model with appropriate optimizer and metrics
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-07
+        )
+        
+        # Separate function references for metrics to avoid sample_weight issues
+        accuracy_metric = tf.keras.metrics.BinaryAccuracy() if multi_label else tf.keras.metrics.SparseCategoricalAccuracy()
+        auc_metric = tf.keras.metrics.AUC(multi_label=multi_label, name='auc')
+        precision_metric = tf.keras.metrics.Precision(name='precision')
+        recall_metric = tf.keras.metrics.Recall(name='recall')
+        
         model.compile(
-            optimizer=tf.keras.optimizers.AdamW(
-                learning_rate=1e-4,
-                weight_decay=0.001,
-                beta_1=0.9,
-                beta_2=0.999,
-                epsilon=1e-07
-            ),
+            optimizer=optimizer,
             loss=loss,
             metrics=[
-                'accuracy',
-                tf.keras.metrics.AUC(name='auc'),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')
+                accuracy_metric,
+                auc_metric,
+                precision_metric,
+                recall_metric
             ]
         )
+        
+        # Print model summary for debugging
+        model.summary()
         
         return model
         

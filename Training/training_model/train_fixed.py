@@ -5,6 +5,7 @@ import numpy as np
 import gc
 import traceback
 import time
+from datetime import datetime
 
 # Import custom modules
 from src.data_preprocessing import create_yolo_generators, analyze_yolo_dataset, set_random_seeds
@@ -19,14 +20,57 @@ MODEL_SAVE_PATH = "/kaggle/working/DermaAI-Care/Training/training_model/models/s
 os.makedirs('models', exist_ok=True)
 os.makedirs('logs', exist_ok=True)
 
+# Define custom thresholds for different classes to handle imbalance
+def get_adaptive_thresholds(class_weights, base_threshold=0.5):
+    """
+    Generate adaptive thresholds based on class weights
+    
+    Args:
+        class_weights: Dictionary mapping class indices to weights
+        base_threshold: Base threshold to adjust from
+    
+    Returns:
+        Dictionary mapping class indices to custom threshold values
+    """
+    if not class_weights:
+        return {}
+    
+    # Get min and max weights for normalization
+    min_weight = min(class_weights.values())
+    max_weight = max(class_weights.values())
+    weight_range = max_weight - min_weight
+    
+    # Set thresholds - higher weight (rarer class) gets lower threshold
+    thresholds = {}
+    for class_idx, weight in class_weights.items():
+        if weight_range > 0:
+            # Normalize weight to 0-1 range and invert (higher weight = lower threshold)
+            norm_weight = (weight - min_weight) / weight_range
+            
+            # More aggressive threshold adjustment for very imbalanced datasets
+            if max_weight / min_weight > 5:  # Significantly imbalanced
+                # Adjust threshold down more for rare classes
+                threshold = base_threshold - (norm_weight * 0.35)
+            else:
+                # Smaller adjustment for more balanced datasets
+                threshold = base_threshold - (norm_weight * 0.2)
+            
+            # Ensure threshold is in reasonable range
+            threshold = max(0.15, min(0.8, threshold))
+            thresholds[class_idx] = threshold
+        else:
+            thresholds[class_idx] = base_threshold
+    
+    return thresholds
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train skin lesion classification model')
-    parser.add_argument('--csv_path', type=str, default='/kaggle/input/annotated-isic-2019-images/ISIC_2019_Training_GroundTruth.csv',
+    parser.add_argument('--csv_path', type=str, default='/kaggle/input/annotated-isic-2019-images/ISIC_2019_Labeled_GroundTruth.csv',
                         help='Path to CSV file with image metadata')
-    parser.add_argument('--image_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/exp/exp',
+    parser.add_argument('--image_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/isic-2019-labeled/isic-2019-labeled/images',
                         help='Directory containing detected images')
-    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/labels/labels',
+    parser.add_argument('--labels_dir', type=str, default='/kaggle/input/annotated-isic-2019-images/isic-2019-labeled/isic-2019-labeled/labels',
                         help='Directory containing YOLO label files')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for training')
@@ -57,7 +101,7 @@ def main():
                         help='Path to save the trained model')
     parser.add_argument('--multi_label', action='store_true', default=True,
                         help='Use multi-label classification')
-    parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/annotated-isic-2019-images/ISIC_2019_Training_Metadata.csv",
+    parser.add_argument('--metadata_csv_path', type=str, default="/kaggle/input/annotated-isic-2019-images/ISIC_2019_Labeled_Metadata.csv",
                        help='Path to CSV file with patient metadata (age, sex, anatomical site)')
     parser.add_argument('--use_metadata', action='store_true',
                        help='Whether to use patient metadata (age, sex, anatomical site)')
@@ -65,6 +109,14 @@ def main():
                        help='Use focal loss for handling class imbalance')
     parser.add_argument('--fine_tune_lr', type=float, default=5e-6,
                        help='Learning rate for fine-tuning')
+    parser.add_argument('--initial_bias', type=float, default=-0.5,
+                       help='Initial bias value for output layer (-0.5 recommended)')
+    parser.add_argument('--weighted_metrics', action='store_true', default=True,
+                       help='Use class-weighted metrics for evaluation')
+    parser.add_argument('--balance_thresholds', action='store_true', default=True,
+                       help='Use adaptive thresholds based on class balance')
+    parser.add_argument('--extra_regularization', action='store_true', default=False,
+                       help='Add extra L2 regularization to prevent overfitting')
     
     args = parser.parse_args()
     
@@ -106,13 +158,18 @@ def main():
             fold_idx=args.fold_idx,
             seed=args.seed,
             augmentation_strength=args.augmentation_strength,
-            metadata_csv_path=args.metadata_csv_path if args.use_metadata else None
+            metadata_csv_path=args.metadata_csv_path if args.use_metadata else None,
+            balance_classes=True  # Always balance classes
         )
         
         # Build the model
         print("Building model...")
         print(f"Number of classes: {n_classes}")
-        model = build_peft_model(n_classes, multi_label=args.multi_label, use_focal_loss=args.focal_loss)
+        model = build_peft_model(
+            n_classes, 
+            multi_label=args.multi_label, 
+            use_focal_loss=args.focal_loss
+        )
         
         if model is None:
             print("Failed to build model. Exiting.")
@@ -205,17 +262,21 @@ def main():
                     print(f"Adjusting fine-tune learning rate to {adaptive_fine_tune_lr} due to low performance")
                 
                 # Use the fixed fine_tune_model function with model_save_path
-                fine_tuned_model, fine_tune_history = fine_tune_model(
+                fine_tuned_model = fine_tune_model(
                     model=model,
                     train_generator=train_generator,
                     val_generator=val_generator,
+                    diagnosis_to_idx=diagnosis_to_idx,
                     epochs=adaptive_fine_tune_epochs,
-                    learning_rate=adaptive_fine_tune_lr,
+                    fine_tune_lr=adaptive_fine_tune_lr,
                     class_weights=class_weights,
-                    batch_size=min(16, args.batch_size),  # Smaller batch size for fine-tuning
-                    verbose=1,
-                    model_save_path=model_save_path
+                    batch_size=min(16, args.batch_size),
+                    early_stopping=args.early_stopping,
+                    reduce_lr=args.reduce_lr
                 )
+                
+                # Store fine_tune_history as None since the function doesn't return it
+                fine_tune_history = None
                 
                 if fine_tuned_model is not None:
                     # Evaluate to compare with baseline
@@ -246,74 +307,90 @@ def main():
                 print(f"Error during fine-tuning: {fine_tune_error}")
                 traceback.print_exc()
         
-        # Evaluate model
-        print("\nEvaluating model...")
-        try:
-            # Ensure evaluation directory exists
-            eval_dir = os.path.join(os.path.dirname(model_save_path), "evaluation_results")
-            os.makedirs(eval_dir, exist_ok=True)
-            
-            # Get the class names from the diagnosis_to_idx mapping
-            class_names = list(diagnosis_to_idx.keys())
-            
-            # Print class mapping for debug purposes
-            print("Class mapping for evaluation:")
-            for i, class_name in enumerate(class_names):
-                print(f"  {i}: {class_name}")
-            
-            # Add a small delay to allow model to stabilize
-            time.sleep(2)
-            
-            # Calculate prediction threshold for each class based on class imbalance
-            # This helps with rare classes
-            thresholds = {}
-            if args.multi_label and class_weights:
-                for class_idx, weight in class_weights.items():
-                    # For ISIC dataset, we need to invert the thresholds since class weights are inverted
-                    # Higher weight means rarer class which needs a lower threshold
-                    if weight > 10.0:  # Very rare classes (VASC, SCC)
-                        thresholds[class_idx] = 0.15  # Much lower threshold
-                    elif weight > 3.0:  # Rare classes (BKL, DF)
-                        thresholds[class_idx] = 0.20  # Lower threshold
-                    elif weight > 1.0:  # Medium classes (AK, BCC)
-                        thresholds[class_idx] = 0.25  # Medium threshold
-                    else:  # Common classes (MEL, NV)
-                        thresholds[class_idx] = 0.30  # Higher threshold
-                
-                print(f"Using custom prediction thresholds: {thresholds}")
-
-                # Add classes 8 (UNK) with a higher threshold
-                if 8 not in thresholds:
-                    thresholds[8] = 0.35
-            
-            metrics = evaluate_model(
-                model=model,
-                test_generator=val_generator,
-                class_names=class_names,
-                output_dir=eval_dir,
-                prediction_thresholds=thresholds if 'thresholds' in locals() else None
-            )
-            
-            if metrics:
-                print("\nEvaluation Metrics:")
-                print("-" * 55)
-                print(f"Validation Accuracy: {metrics.get('accuracy', 0):.4f}")
-                print(f"Validation Precision: {metrics.get('precision', 0):.4f}")
-                print(f"Validation Recall/Sensitivity: {metrics.get('recall', 0):.4f}")
-                print(f"Validation F1 Score: {metrics.get('f1', 0):.4f}")
-                print(f"Validation AUC: {metrics.get('auc', 0):.4f}")
-                print(f"Validation Specificity: {metrics.get('specificity', 0):.4f}")
-                
-                # Print paths of saved files
-                if 'confusion_matrix_path' in metrics:
-                    print(f"\nConfusion matrix saved to: {metrics['confusion_matrix_path']}")
-                if 'report_path' in metrics:
-                    print(f"Classification report saved to: {metrics['report_path']}")
+        # Generate custom prediction thresholds based on class weights
+        prediction_thresholds = get_adaptive_thresholds(class_weights, base_threshold=0.35)
         
-        except Exception as e:
-            print(f"Error during evaluation: {e}")
-            traceback.print_exc()
+        # Adjust thresholds further for very rare classes
+        # Lower thresholds for rare classes to increase recall
+        if class_weights:
+            for class_idx, weight in class_weights.items():
+                # Identify very rare classes
+                if weight > 2 * np.mean(list(class_weights.values())):
+                    # Use an even lower threshold
+                    prediction_thresholds[class_idx] = max(0.15, prediction_thresholds.get(class_idx, 0.35) - 0.1)
+        
+        print(f"Using custom prediction thresholds: {prediction_thresholds}")
+        
+        # Evaluate model
+        print("Generating predictions...")
+        # Create a new evaluation directory with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        eval_dir = os.path.join(os.path.dirname(model_save_path), 'evaluation_results', timestamp)
+        os.makedirs(eval_dir, exist_ok=True)
+        
+        # Get class names for evaluation
+        eval_class_names = []
+        for i in range(n_classes):
+            # Find the class name for each index
+            for diagnosis, idx in diagnosis_to_idx.items():
+                if idx == i:
+                    eval_class_names.append(diagnosis)
+                    break
+            else:
+                # If we didn't find a match, use a generic name
+                eval_class_names.append(f"Class_{i}")
+        
+        # Perform evaluation with the custom thresholds
+        metrics = evaluate_model(
+            model=model,
+            test_generator=val_generator,
+            class_names=eval_class_names,
+            output_dir=eval_dir,
+            prediction_thresholds=prediction_thresholds
+        )
+        
+        # Print metrics
+        if metrics:
+            print("\nEvaluation Metrics:")
+            print("-" * 55)
+            print(f"Validation Accuracy: {metrics['accuracy']:.4f}")
+            print(f"Validation Precision: {metrics['precision']:.4f}")
+            print(f"Validation Recall/Sensitivity: {metrics['recall']:.4f}")
+            print(f"Validation F1 Score: {metrics['f1']:.4f}")
+            print(f"Validation AUC: {metrics['auc']:.4f}")
+            print(f"Validation Specificity: {metrics['specificity']:.4f}")
             
+            # Print weighted metrics if they exist
+            if 'weighted_accuracy' in metrics:
+                print("\nWeighted Metrics (Balanced for Class Imbalance):")
+                print("-" * 55)
+                print(f"Weighted Accuracy: {metrics['weighted_accuracy']:.4f}")
+                print(f"Weighted Precision: {metrics['weighted_precision']:.4f}")
+                print(f"Weighted Recall: {metrics['weighted_recall']:.4f}")
+                print(f"Weighted F1: {metrics['weighted_f1']:.4f}")
+                print(f"Weighted AUC: {metrics['weighted_auc']:.4f}")
+            
+            # Save confusion matrix and classification report
+            print(f"\nConfusion matrix saved to: {metrics['confusion_matrix_path']}")
+            print(f"Classification report saved to: {metrics['report_path']}")
+            
+            # If training multiple folds, save metrics for aggregation
+            if args.n_folds > 1:
+                # Save metrics for this fold
+                fold_metrics_path = os.path.join(
+                    os.path.dirname(model_save_path), 
+                    f'fold_{args.fold_idx}_metrics.json'
+                )
+                with open(fold_metrics_path, 'w') as f:
+                    import json
+                    # Convert numpy values to float for JSON serialization
+                    metrics_json = {k: float(v) if isinstance(v, (np.float32, np.float64)) else v 
+                                  for k, v in metrics.items() if k not in ['confusion_matrix_path', 'report_path']}
+                    json.dump(metrics_json, f, indent=2)
+                
+                print(f"Fold {args.fold_idx} metrics saved to: {fold_metrics_path}")
+        else:
+            print("Evaluation failed to return metrics.")
     except Exception as e:
         print(f"Error in main training process: {str(e)}")
         traceback.print_exc()

@@ -74,7 +74,7 @@ export class AuthService {
 
     const streamToken = streamChat.createToken(user.id);
 
-    // test
+    // test2
 
     return {
       accessToken,

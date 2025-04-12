@@ -35,4 +35,5 @@ export type User = {
   dateOfBirth: string | null;
   accessToken?: string;
   refreshToken?: string;
+  streamToken?: string | undefined | null;
 };

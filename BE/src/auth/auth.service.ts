@@ -3,6 +3,7 @@ import {
   Injectable,
   UnauthorizedException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
@@ -15,6 +16,11 @@ import { UserRepository } from 'src/users/users.repository';
 import { PrismaService } from 'src/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MailerService } from '@nestjs-modules/mailer';
+import { StreamChat } from 'stream-chat';
+const streamChat = StreamChat.getInstance(
+  process.env.STREAM_KEY!,
+  process.env.STREAM_SECRET!,
+);
 
 @Injectable()
 export class AuthService {
@@ -58,6 +64,16 @@ export class AuthService {
 
     await this.usersService.updateHashedRefreshToken(payloadUpdate);
 
+    const {
+      users: [firstUser],
+    } = await streamChat.queryUsers({ id: user.id });
+
+    if (!firstUser) {
+      throw new UnauthorizedException('User not found in stream chat');
+    }
+
+    const streamToken = streamChat.createToken(user.id);
+
     return {
       accessToken,
       refreshToken,
@@ -67,6 +83,7 @@ export class AuthService {
       role: user.role,
       avatarUrl: user.avatarUrl,
       coverPageUrl: user.coverPageUrl,
+      streamToken,
     };
   }
 
@@ -75,6 +92,17 @@ export class AuthService {
       await this.generateTokens(createUserDto);
 
     const result = await this.userRepository.createUser(createUserDto);
+
+    // check for existing user
+    const existingUsers = await streamChat.queryUsers({ id: result.id });
+    if (existingUsers.users.length > 0) {
+      throw new BadRequestException('User already exist in stream chat');
+    }
+    await streamChat.upsertUser({
+      id: result.id,
+      name: result.userName,
+      image: result.avatarUrl,
+    });
 
     return {
       ...result,

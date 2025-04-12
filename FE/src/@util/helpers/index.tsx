@@ -84,3 +84,14 @@ export const formatDateTime = (dateTimeString: string): string => {
 
   return `${formattedTime} ${formattedDate}`;
 };
+
+export function capitalizeFirstLetter(val: string) {
+  return String(val).charAt(0).toUpperCase() + String(val).slice(1);
+}
+
+export function capitalizeWords(str: string) {
+  return str
+    .split(" ")
+    .map((word) => capitalizeFirstLetter(word))
+    .join(" ");
+}

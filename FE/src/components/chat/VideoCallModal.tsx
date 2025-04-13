@@ -39,6 +39,7 @@ const callingState = useCallCallingState()
 
   const handleClose = async () => {
     setIsOpen(false)
+    call.leave()
   }
 
   return (

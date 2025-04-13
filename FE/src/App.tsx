@@ -34,8 +34,6 @@ const App = () => {
   const { userInfo } = useAppStore();
   const [clientReady, setClientReady] = useState(false);
 
-  console.log({videoClient})
-
   useEffect(() => {
     if (!userInfo) return;
 
@@ -85,8 +83,6 @@ const App = () => {
       setClientReady(false);
     };
   }, [userInfo, userInfo.avatarUrl, userInfo.id, userInfo.streamToken, userInfo.userName]);
-
-  // if (!clientReady) return <div className="loading">Loading...</div>;
 
   return (
     <QueryClientProvider client={queryClient}>

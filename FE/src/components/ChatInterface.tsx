@@ -13,9 +13,9 @@ import SharedMedia from "./chat/SharedMedia";
 import { useState, useEffect } from "react";
 import { useStreamVideoClient, Call } from "@stream-io/video-react-sdk";
 import VideoCallModal from "./chat/VideoCallModal";
-import VideoCallButton from "./chat/VideoCallButton";
 import IncomingCallNotification from "./chat/IncomingCallNotification";
 import { useAppStore } from "@/store";
+import CustomChannelHeader from "./chat/CustomChannelHeader";
 
 export const ChatInterface = () => {
   const { client, channel } = useChatContext();
@@ -130,22 +130,7 @@ export const ChatInterface = () => {
           <div className="min-w-[750px]">
             <Window>
               <div className="flex flex-col h-full">
-                <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200">
-                  <div className="flex items-center">
-                    <img
-                      src={userInfo.avatarUrl}
-                      alt="User Avatar"
-                      className="w-10 h-10 rounded-full mr-3"
-                    />
-                    <div>
-                      <div className="font-semibold">{channel?.data?.name}</div>
-                      <div className="text-sm text-green-500">Online</div>
-                    </div>
-                  </div>
-                  <div className="flex">
-                    <VideoCallButton onStartCall={handleStartCall} />
-                  </div>
-                </div>
+                <CustomChannelHeader userInfo={userInfo} channel={channel} handleStartCall={handleStartCall}/>
                 <MessageList />
                 <MessageInput />
               </div>

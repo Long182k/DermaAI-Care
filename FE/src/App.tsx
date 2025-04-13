@@ -22,14 +22,19 @@ import { useAppStore } from "./store";
 import { StreamChat } from "stream-chat";
 import { Chat as StreamChatComponent } from "stream-chat-react";
 import { useEffect, useState } from "react";
+import { StreamVideo, StreamVideoClient, useStreamVideoClient } from "@stream-io/video-react-sdk"
 
 // Initialize Stream Chat client
 const chatClient = StreamChat.getInstance(import.meta.env.VITE_STREAM_KEY!);
+const videoClient = new StreamVideoClient({ apiKey: import.meta.env.VITE_STREAM_KEY! });
+
 
 const queryClient = new QueryClient();
 const App = () => {
   const { userInfo } = useAppStore();
   const [clientReady, setClientReady] = useState(false);
+
+  console.log({videoClient})
 
   useEffect(() => {
     if (!userInfo) return;
@@ -54,6 +59,15 @@ const App = () => {
           token
         );
 
+        await videoClient.connectUser(
+          {
+            id: userInfo.userId,
+            name: userInfo.userName,
+            image: userInfo.avatarUrl,
+          },
+          token
+        );
+
         setClientReady(true);
       } catch (error) {
         console.error("Failed to connect user", error);
@@ -67,15 +81,10 @@ const App = () => {
     return () => {
       // Disconnect when component unmounts
       chatClient.disconnectUser();
+      videoClient.disconnectUser()
       setClientReady(false);
     };
-  }, [
-    userInfo,
-    userInfo.avatarUrl,
-    userInfo.id,
-    userInfo.streamToken,
-    userInfo.userName,
-  ]);
+  }, [userInfo, userInfo.avatarUrl, userInfo.id, userInfo.streamToken, userInfo.userName]);
 
   // if (!clientReady) return <div className="loading">Loading...</div>;
 
@@ -85,6 +94,7 @@ const App = () => {
         <Toaster />
         <Sonner />
         <BrowserRouter>
+        <StreamVideo client={videoClient}>
           <StreamChatComponent client={chatClient}>
             <Routes>
               <Route path="/" element={<Index />} />
@@ -105,6 +115,7 @@ const App = () => {
               <Route path="*" element={<NotFound />} />
             </Routes>
           </StreamChatComponent>
+          </StreamVideo>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>

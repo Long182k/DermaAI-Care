@@ -10,6 +10,7 @@ export function ChannelListCustom({
 }: ChannelListMessengerProps) {
   const { setActiveChannel, channel: activeChannel } = useChatContext();
   const { client } = useChatContext();
+  
 
   const createChannel = useMutation({
     mutationFn: ({
@@ -45,7 +46,6 @@ export function ChannelListCustom({
     queryFn: () => doctorApi.getAllDoctors(),
     select: (res) => res.doctors,
   });
-
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDoctorId, setSelectedDoctorId] = useState<
     string | undefined

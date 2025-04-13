@@ -96,31 +96,6 @@ export const ChatInterface = () => {
     }
   };
 
-  const handleEndCall = async () => {
-    if (activeCall) {
-      try {
-        await activeCall.leave();
-        setActiveCall(null);
-        setShowCallModal(false);
-
-        // Notify the other user that the call ended
-        if (channel) {
-          console.log('end call')
-          await channel.sendMessage({
-            text: "Ended the video call",
-            call_notification: {
-              call_id: activeCall.id,
-              type: "video",
-              status: "ended",
-            },
-          });
-        }
-      } catch (error) {
-        console.error("Error ending call:", error);
-      }
-    }
-  };
-
   const handleAcceptCall = (call: Call) => {
     setActiveCall(call);
     setShowCallModal(true);
@@ -181,7 +156,7 @@ export const ChatInterface = () => {
       </div>
       <SharedMedia />
       {showCallModal && activeCall && (
-        <VideoCallModal call={activeCall} onEndCall={handleEndCall} />
+        <VideoCallModal call={activeCall} />
       )}
       {incomingCall && (
         <IncomingCallNotification

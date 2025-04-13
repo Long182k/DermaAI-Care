@@ -5,10 +5,9 @@ import CallLayout from "./CallLayout"
 
 interface VideoCallModalProps {
   call: Call
-  onEndCall: () => void
 }
 
-export default function VideoCallModal({ call, onEndCall }: VideoCallModalProps) {
+export default function VideoCallModal({ call }: VideoCallModalProps) {
   const [isOpen, setIsOpen] = useState(true)
   const { useCallCallingState } = useCallStateHooks()
 const callingState = useCallCallingState()
@@ -39,7 +38,6 @@ const callingState = useCallCallingState()
   }, [call, callingState])
 
   const handleClose = async () => {
-    onEndCall()
     setIsOpen(false)
   }
 

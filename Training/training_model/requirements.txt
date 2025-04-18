@@ -1,4 +1,4 @@
-# tensorflow==2.18.0
+# tensorflow==2.17.1
 # numpy>=1.23.0
 # matplotlib>=3.7.0
 # pandas>=2.0.0
@@ -18,7 +18,7 @@
 
 
 tensorflow==2.18.0
-numpy==1.24.3
+numpy==1.26.0
 matplotlib==3.7.1
 pandas==2.0.3
 scikit-learn==1.2.2
@@ -32,3 +32,4 @@ flask==2.2.5
 flask-limiter==3.3.1  # For rate limiting
 torch==2.0.1  # For YOLOv5 model loading
 werkzeug==2.2.3  # For secure_filename in Flask app
+mlflow

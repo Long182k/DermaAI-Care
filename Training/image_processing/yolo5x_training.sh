@@ -11,14 +11,14 @@ pip install -r requirements.txt
 #    and a data.yaml file. Let's assume data.yaml is at: 'SkinLesionDetection-4/data.yaml'
 
 # 4. Train YOLOv5x
-# python yolov5/train.py \
-#   --data /teamspace/studios/this_studio/Skin-Lesion-Detection-4/data.yaml \
-#   --weights yolov5x.pt \
-#   --img 640 \
-#   --batch 16 \
-#   --epochs 100 \
-#   --project "lesion_runs" \
-#   --name "yolov5x_skin_lesions"
+python yolov5/train.py \
+  --data /teamspace/studios/this_studio/Skin-Lesion-Detection-4/data.yaml \
+  --weights yolov5x.pt \
+  --img 640 \
+  --batch 16 \
+  --epochs 100 \
+  --project "lesion_runs" \
+  --name "yolov5x_skin_lesions"
 
 # Explanation of the arguments:
 # --data: Path to the data.yaml that points to your train/val sets

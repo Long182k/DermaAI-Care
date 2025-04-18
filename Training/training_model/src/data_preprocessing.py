@@ -8,6 +8,7 @@ from tensorflow.keras.preprocessing.image import img_to_array
 from tensorflow.keras.applications.efficientnet import preprocess_input
 from sklearn.model_selection import StratifiedKFold
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.model_selection import StratifiedKFold
 import gc
 import random
 import traceback
@@ -24,12 +25,9 @@ def set_random_seeds(seed=42):
     if hasattr(tf.config, "experimental"):
         tf.config.experimental.enable_op_determinism()
 
-
-# Call this function at the beginning
 set_random_seeds()
 
 
-# Replace the create_augmentation_pipeline function
 def create_augmentation_pipeline(seed=42, strength='medium'):
     """
     Create an augmentation pipeline with configurable strength
@@ -41,7 +39,7 @@ def create_augmentation_pipeline(seed=42, strength='medium'):
     ]
     
     # Add more augmentations based on strength
-    if strength == 'medium' or strength == 'high':
+    if strength == 'medium':
         base_augmentations.extend([
             tf.keras.layers.RandomZoom(0.2, seed=seed),
             tf.keras.layers.RandomBrightness(0.2, seed=seed),
@@ -186,7 +184,7 @@ class YOLODetectionGenerator(tf.keras.utils.Sequence):
 
         return batch_x, batch_y
 
-
+#### min_samples_per_class=5 -> remove UNK -> classes = 8
 def load_yolo_detections(
     image_dir, labels_dir, csv_path, min_samples_per_class=5, n_folds=5, metadata_csv_path=None
 ):
@@ -215,10 +213,10 @@ def load_yolo_detections(
         print("No metadata file provided or file not found.")
     
     # Define the target classes (ISIC 2019 format)
-    target_columns = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC', 'UNK']
+    target_columns = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC', 'UNK'] #### 9
     
     # Create diagnosis mapping
-    diagnosis_to_idx = {label: idx for idx, label in enumerate(target_columns)}
+    diagnosis_to_idx = {label: idx for idx, label in enumerate(target_columns)} #### 8
     
     # Process each image and its corresponding YOLO label
     image_data = []
@@ -246,6 +244,7 @@ def load_yolo_detections(
                             y_center = float(values[2])
                             width = float(values[3])
                             height = float(values[4])
+                            confidence = float(values[5])
                             bbox = [x_center, y_center, width, height]
                         else:
                             print(f"Warning: Invalid format in {label_path}, using default bbox")
@@ -274,6 +273,7 @@ def load_yolo_detections(
             image_data.append({
                 'image_path': image_path,
                 'bbox': bbox,
+                'confidence': confidence,
                 'target': target,
                 'image_name': image_name,
                 'metadata': metadata
@@ -312,7 +312,7 @@ def load_yolo_detections(
         )
     
     print(f"\nLoaded {len(df_processed)} images")
-    print(f"Number of classes: {len(diagnosis_to_idx)}")
+    print(f"Number of classes: {len(diagnosis_to_idx)}") ## 8
     print("\nClass mapping:")
     for label, idx in diagnosis_to_idx.items():
         print(f"{label}: {idx}")
@@ -400,7 +400,6 @@ def create_yolo_generators(csv_path, image_dir, labels_dir, batch_size=32, min_s
             class_weights = {i: 1.0 for i in range(n_classes)}
         
         # Create stratified k-fold split for better cross-validation
-        from sklearn.model_selection import StratifiedKFold
         kf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
         
         # For stratification, use the class with highest probability in multi-label case
@@ -459,7 +458,7 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir, metadata_csv_path=None
     )
     
     # Convert targets to numpy array for analysis
-    targets = np.array([x for x in df_processed['target'].values])
+    targets = np.array([x['target'] for x in image_data])
     
     # Calculate class distribution
     class_distribution = np.sum(targets, axis=0)
@@ -535,15 +534,16 @@ def analyze_yolo_dataset(csv_path, image_dir, labels_dir, metadata_csv_path=None
 if __name__ == "__main__":
     CSV_PATH = "/kaggle/input/isic-2019-labeled/ISIC_2019_Labeled_GroundTruth.csv"
     IMAGE_DIR = "/kaggle/input/isic-2019-labeled/isic-2019-labeled/isic-2019-labeled/images"
+    LABELS_DIR = "/kaggle/input/isic-2019-labeled/isic-2019-labeled/isic-2019-labeled/labels"  # Add this line for YOLO labels
 
     # Analyze dataset
-    dataset_stats = analyze_dataset(CSV_PATH)
+    dataset_stats = analyze_yolo_dataset(CSV_PATH, IMAGE_DIR, LABELS_DIR)
     print("\nClass weights for handling imbalance:")
     print(dataset_stats["class_weights"])
 
     # Create generators
-    train_gen, val_gen, diagnosis_to_idx, n_classes, fold_size = create_generators(
-        CSV_PATH, IMAGE_DIR, fold_idx=0
+    train_gen, val_gen, diagnosis_to_idx, n_classes, n_folds, class_weights = create_yolo_generators(
+        CSV_PATH, IMAGE_DIR, LABELS_DIR, fold_idx=0
     )
 
 

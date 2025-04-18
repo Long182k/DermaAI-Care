@@ -165,7 +165,7 @@ def main():
         
         # Build the model
         print("Building model...")
-        print(f"Number of classes: {n_classes}")
+        print(f"Number of classes: {n_classes}") #### 8
         model = build_peft_model(
             n_classes, 
             multi_label=args.multi_label, 
@@ -221,6 +221,8 @@ def main():
                 batch_size=args.batch_size,
                 model_save_path=model_save_path
             )
+
+            print("train_model history",history)
             
             # Save the model
             try:
@@ -253,17 +255,20 @@ def main():
                         break
                 else:
                     # For custom generators (like keras.utils.Sequence), use indexing
+
+                    ## test_batch_y -> use for comparing predictions with actual labels
                     test_batch_x, test_batch_y = val_generator[0]
                 
-                preds = model.predict(test_batch_x,test_batch_y)
+                preds = model.predict(test_batch_x)
                 preds_classes = np.argmax(preds, axis=1) if preds.shape[1] > 1 else (preds > 0.5).astype(int)
                 print("Prediction class distribution (sample):")
+
                 for cls in range(min(preds.shape[1], 9)):
                     count = np.sum(preds_classes == cls)
                     print(f"  Class {cls}: {count} predictions")
                 
                 # Adjust fine-tuning parameters based on dataset analysis
-                adaptive_fine_tune_epochs = min(30, args.fine_tune_epochs)  # Cap at 30 epochs max
+                adaptive_fine_tune_epochs =  args.fine_tune_epochs
                 adaptive_fine_tune_lr = args.fine_tune_lr
                 if np.mean(baseline_metrics) < 0.3:  # If model is performing poorly
                     adaptive_fine_tune_lr = 1e-5  # Use higher learning rate
@@ -278,7 +283,7 @@ def main():
                     epochs=adaptive_fine_tune_epochs,
                     fine_tune_lr=adaptive_fine_tune_lr,
                     class_weights=class_weights,
-                    batch_size=min(16, args.batch_size),
+                    batch_size=args.batch_size,
                     early_stopping=args.early_stopping,
                     reduce_lr=args.reduce_lr
                 )

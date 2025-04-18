@@ -16,6 +16,8 @@
 /BE/build
 
 # Training specific ignores
+Training/SD-198/
+Training/SD-198_cleaned/
 /Training/data/
 /Training/venv/
 /Training/annotated_images/

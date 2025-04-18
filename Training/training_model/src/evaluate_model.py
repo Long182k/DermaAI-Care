@@ -559,6 +559,139 @@ def evaluate_model(model, test_generator, class_names, output_dir=None, predicti
         traceback.print_exc()
         return None
 
+
+def plot_confusion_matrix(y_true, y_pred, class_names, output_path, class_indices=None):
+    """
+    Plot and save confusion matrix
+    
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        class_names: List of class names
+        output_path: Path to save the plot
+        class_indices: Optional list of class indices to include in the matrix
+    """
+    try:
+        # Create confusion matrix
+        cm = confusion_matrix(y_true, y_pred, labels=class_indices)
+        
+        # Create figure
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=class_names,
+                    yticklabels=class_names)
+        plt.title('Confusion Matrix')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        
+        # Save the plot
+        plt.savefig(output_path)
+        plt.close()
+        
+    except Exception as e:
+        print(f"Error plotting confusion matrix: {e}")
+        traceback.print_exc()
+
+# Function to calculate weighted metrics based on class frequencies
+def calculate_weighted_metrics(y_true, y_pred, y_pred_proba, class_weights=None):
+    """
+    Calculate weighted evaluation metrics that better handle class imbalance
+    
+    Args:
+        y_true: Ground truth labels
+        y_pred: Predicted class labels
+        y_pred_proba: Predicted class probabilities
+        class_weights: Optional dictionary of class weights
+        
+    Returns:
+        Dictionary of weighted metrics
+    """
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+    
+    # Calculate class frequencies for weighting if not provided
+    if class_weights is None:
+        # Count occurrences of each class
+        classes, counts = np.unique(y_true, return_counts=True)
+        total = len(y_true)
+        
+        # Invert frequencies to give more weight to rare classes
+        freqs = counts / total
+        weights = {cls: 1.0 / (freq + 0.1) for cls, freq in zip(classes, freqs)}
+        
+        # Normalize weights to have average of 1.0
+        avg_weight = sum(weights.values()) / len(weights)
+        class_weights = {cls: w / avg_weight for cls, w in weights.items()}
+    
+    # Create sample weights array based on class weights
+    sample_weights = np.ones(len(y_true))
+    for i, label in enumerate(y_true):
+        if label in class_weights:
+            sample_weights[i] = class_weights[label]
+    
+    # Calculate sample-weighted metrics
+    weighted_accuracy = accuracy_score(y_true, y_pred, sample_weight=sample_weights)
+    
+    # Convert to one-hot encoding for multi-class metrics if needed
+    if len(np.unique(y_true)) > 2:
+        from sklearn.preprocessing import OneHotEncoder
+        encoder = OneHotEncoder(sparse=False)
+        y_true_onehot = encoder.fit_transform(y_true.reshape(-1, 1))
+        
+        # Calculate AUC score with weights
+        try:
+            weighted_auc = roc_auc_score(
+                y_true_onehot, 
+                y_pred_proba, 
+                sample_weight=sample_weights,
+                multi_class='ovr',
+                average='weighted'
+            )
+        except Exception as e:
+            print(f"Error calculating weighted AUC: {e}")
+            weighted_auc = 0.5
+    else:
+        # Binary case
+        try:
+            weighted_auc = roc_auc_score(y_true, y_pred_proba[:, 1], sample_weight=sample_weights)
+        except Exception as e:
+            print(f"Error calculating weighted AUC: {e}")
+            weighted_auc = 0.5
+    
+    # Calculate other weighted metrics
+    weighted_precision = precision_score(
+        y_true, y_pred, 
+        average='weighted', 
+        sample_weight=sample_weights,
+        zero_division=0
+    )
+    
+    weighted_recall = recall_score(
+        y_true, y_pred, 
+        average='weighted', 
+        sample_weight=sample_weights,
+        zero_division=0
+    )
+    
+    weighted_f1 = f1_score(
+        y_true, y_pred, 
+        average='weighted', 
+        sample_weight=sample_weights,
+        zero_division=0
+    )
+    
+    return {
+        'weighted_accuracy': weighted_accuracy,
+        'weighted_precision': weighted_precision,
+        'weighted_recall': weighted_recall,
+        'weighted_f1': weighted_f1,
+        'weighted_auc': weighted_auc
+    }
+
+### do not use these function
+#############################################################
+# ###########################################################
+# ###########################################################
+# ###########################################################
 def evaluate_multilabel(model, test_generator, predictions, class_names, output_dir, timestamp):
     """
     Evaluate multi-label classification model
@@ -719,130 +852,3 @@ def save_model(model, save_path):
         print(f"Model successfully saved to {save_path}")
     except Exception as e:
         print(f"Error saving model: {e}")
-
-def plot_confusion_matrix(y_true, y_pred, class_names, output_path, class_indices=None):
-    """
-    Plot and save confusion matrix
-    
-    Args:
-        y_true: True labels
-        y_pred: Predicted labels
-        class_names: List of class names
-        output_path: Path to save the plot
-        class_indices: Optional list of class indices to include in the matrix
-    """
-    try:
-        # Create confusion matrix
-        cm = confusion_matrix(y_true, y_pred, labels=class_indices)
-        
-        # Create figure
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                    xticklabels=class_names,
-                    yticklabels=class_names)
-        plt.title('Confusion Matrix')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-        
-        # Save the plot
-        plt.savefig(output_path)
-        plt.close()
-        
-    except Exception as e:
-        print(f"Error plotting confusion matrix: {e}")
-        traceback.print_exc()
-
-# Function to calculate weighted metrics based on class frequencies
-def calculate_weighted_metrics(y_true, y_pred, y_pred_proba, class_weights=None):
-    """
-    Calculate weighted evaluation metrics that better handle class imbalance
-    
-    Args:
-        y_true: Ground truth labels
-        y_pred: Predicted class labels
-        y_pred_proba: Predicted class probabilities
-        class_weights: Optional dictionary of class weights
-        
-    Returns:
-        Dictionary of weighted metrics
-    """
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-    
-    # Calculate class frequencies for weighting if not provided
-    if class_weights is None:
-        # Count occurrences of each class
-        classes, counts = np.unique(y_true, return_counts=True)
-        total = len(y_true)
-        
-        # Invert frequencies to give more weight to rare classes
-        freqs = counts / total
-        weights = {cls: 1.0 / (freq + 0.1) for cls, freq in zip(classes, freqs)}
-        
-        # Normalize weights to have average of 1.0
-        avg_weight = sum(weights.values()) / len(weights)
-        class_weights = {cls: w / avg_weight for cls, w in weights.items()}
-    
-    # Create sample weights array based on class weights
-    sample_weights = np.ones(len(y_true))
-    for i, label in enumerate(y_true):
-        if label in class_weights:
-            sample_weights[i] = class_weights[label]
-    
-    # Calculate sample-weighted metrics
-    weighted_accuracy = accuracy_score(y_true, y_pred, sample_weight=sample_weights)
-    
-    # Convert to one-hot encoding for multi-class metrics if needed
-    if len(np.unique(y_true)) > 2:
-        from sklearn.preprocessing import OneHotEncoder
-        encoder = OneHotEncoder(sparse=False)
-        y_true_onehot = encoder.fit_transform(y_true.reshape(-1, 1))
-        
-        # Calculate AUC score with weights
-        try:
-            weighted_auc = roc_auc_score(
-                y_true_onehot, 
-                y_pred_proba, 
-                sample_weight=sample_weights,
-                multi_class='ovr',
-                average='weighted'
-            )
-        except Exception as e:
-            print(f"Error calculating weighted AUC: {e}")
-            weighted_auc = 0.5
-    else:
-        # Binary case
-        try:
-            weighted_auc = roc_auc_score(y_true, y_pred_proba[:, 1], sample_weight=sample_weights)
-        except Exception as e:
-            print(f"Error calculating weighted AUC: {e}")
-            weighted_auc = 0.5
-    
-    # Calculate other weighted metrics
-    weighted_precision = precision_score(
-        y_true, y_pred, 
-        average='weighted', 
-        sample_weight=sample_weights,
-        zero_division=0
-    )
-    
-    weighted_recall = recall_score(
-        y_true, y_pred, 
-        average='weighted', 
-        sample_weight=sample_weights,
-        zero_division=0
-    )
-    
-    weighted_f1 = f1_score(
-        y_true, y_pred, 
-        average='weighted', 
-        sample_weight=sample_weights,
-        zero_division=0
-    )
-    
-    return {
-        'weighted_accuracy': weighted_accuracy,
-        'weighted_precision': weighted_precision,
-        'weighted_recall': weighted_recall,
-        'weighted_f1': weighted_f1,
-        'weighted_auc': weighted_auc
-    }

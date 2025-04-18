@@ -38,10 +38,10 @@ def focal_loss(gamma=2.0, alpha=0.25):
     
     return loss_function
 
-def train_model(model, train_generator, val_generator, epochs=50, batch_size=32, 
-                early_stopping_patience=10, reduce_lr_patience=5, 
-                callbacks=None, class_weights=None, model_save_path=None,
-                learning_rate=0.0001, multi_label=False):
+def train_model(model, train_generator, val_generator, epochs, batch_size, 
+                early_stopping_patience, reduce_lr_patience, 
+                callbacks, class_weights, model_save_path,
+                learning_rate, multi_label):
     """
     Train the model with improved learning rate scheduling and regularization
     """
@@ -147,7 +147,7 @@ def train_model(model, train_generator, val_generator, epochs=50, batch_size=32,
         traceback.print_exc()
         return None
 
-def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epochs=5, batch_size=32, class_weights=None, early_stopping=10, reduce_lr=5, fine_tune_lr=1e-5, callbacks=None):
+def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epochs, batch_size, class_weights, early_stopping, reduce_lr, fine_tune_lr, callbacks):
     """
     Fine-tune a pre-trained model for skin lesion classification with careful layer unfreezing
     
@@ -184,7 +184,7 @@ def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epo
         # Get a batch of validation data
         if isinstance(val_generator, tf.data.Dataset):
             # For tf.data.Dataset, iterate to get the first batch
-            for x_test, y_test in val_generator.take(1):
+            for x_test, y_test in val_generator.take(1):  ### mising y_test for verify with labels?
                 break
         else:
             # For other generators, use indexing
@@ -229,8 +229,6 @@ def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epo
                     enhanced_weights[class_idx] = weight
             
             # Print the enhanced weights
-            original_sum = sum(class_weights.values())
-            enhanced_sum = sum(enhanced_weights.values())
             print("Original vs Enhanced class weights:")
             for class_idx in class_weights:
                 class_name = {v: k for k, v in diagnosis_to_idx.items()}.get(class_idx, f"Class {class_idx}")
@@ -405,8 +403,8 @@ def fine_tune_model(model, train_generator, val_generator, diagnosis_to_idx, epo
         traceback.print_exc()
         return model
 
-def build_peft_model(num_classes=9, multi_label=False, use_focal_loss=True, 
-                    initial_bias=-0.5, extra_regularization=False):
+def build_peft_model(num_classes, multi_label, use_focal_loss, 
+                    initial_bias, extra_regularization):
     """
     Build a model with Parameter-Efficient Fine-Tuning capabilities
     
@@ -420,10 +418,10 @@ def build_peft_model(num_classes=9, multi_label=False, use_focal_loss=True,
     Returns:
         A compiled model
     """
-    # Create the base model - using EfficientNetB0 instead of InceptionResNetV2 to avoid GPU MaxPool gradient errors
+
     base_model = tf.keras.applications.EfficientNetB0(
         include_top=False,
-        weights='imagenet',
+        weights='imagenet', ### weight noisy-students
         input_shape=(224, 224, 3),
         pooling='avg'
     )

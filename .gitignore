@@ -12,7 +12,14 @@
 /build
 /FE/build
 /BE/build
-
+/Training/SD-198/*.jpg
+/Training/data/*
+/Training/myenv/*
+/Training/training_model/src/annotated_images/*
+*.keras
+.cursor/rules
+.cursorrules
+/Training/training_model/src/best.pt
 # Testing
 /coverage
 /FE/coverage

@@ -59,9 +59,51 @@ export const doctorApi = {
   },
 };
 
+export interface Appointment {
+  id: string;
+  patientId: string;
+  doctorId: string;
+  status: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  scheduleId: string;
+  Patient: {
+    id: string;
+    userName: string;
+    firstName: string | null;
+    lastName: string | null;
+    email: string;
+    avatarUrl?: string;
+  };
+  Doctor: {
+    id: string;
+    userName: string;
+    firstName: string | null;
+    lastName: string | null;
+    email: string;
+    education?: string;
+    avatarUrl?: string;
+  };
+  Schedule: {
+    id: string;
+    doctorId: string;
+    startTime: string;
+    endTime: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
 export const appointmentApi = {
   createAppointment: async (data: CreateAppointmentDto) => {
     const response = await axiosClient.post("/appointments", data);
     return response.data;
+  },
+  
+  getUserAppointments: async () => {
+    const response = await axiosClient.get("/appointments/user");
+    return response.data as Appointment[];
   },
 };

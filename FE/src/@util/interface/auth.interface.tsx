@@ -50,4 +50,5 @@ export interface AuthStore {
   signup: (data: RegisterNewUserParams) => Promise<RegisterResponse>;
   login: (data: LoginParams) => Promise<LoginResponse>;
   logout: () => Promise<void>;
+  streamToken?: string | undefined | null;
 }

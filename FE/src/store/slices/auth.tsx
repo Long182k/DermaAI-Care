@@ -46,6 +46,7 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
         "/auth/register",
         data
       );
+      console.log("🚀 response:", response);
       set({ userInfo: response });
       localStorage.setItem("access_token", response.accessToken);
       return response;

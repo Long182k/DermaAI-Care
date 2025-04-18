@@ -17,6 +17,7 @@ import { PrismaService } from 'src/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MailerService } from '@nestjs-modules/mailer';
 import { StreamChat } from 'stream-chat';
+
 const streamChat = StreamChat.getInstance(
   process.env.STREAM_KEY!,
   process.env.STREAM_SECRET!,

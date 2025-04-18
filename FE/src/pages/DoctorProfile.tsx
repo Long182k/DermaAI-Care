@@ -41,7 +41,6 @@ const DoctorProfile = () => {
   const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(
     null
   );
-  console.log("🚀 selectedSchedule:", selectedSchedule);
   const [notes, setNotes] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const { userInfo } = useAppStore();
@@ -66,14 +65,17 @@ const DoctorProfile = () => {
   // Function to handle booking appointment after notes are added
   const handleBookAppointment = () => {
     if (selectedSchedule) {
+      console.log("🚀 selectedSchedule:", selectedSchedule);
+      console.log("userInfo?.id", userInfo?.id);
       // Clear schedule ID from URL before navigating
       window.history.pushState({}, "", window.location.pathname);
       createAppointmentMutation.mutate({
-        patientId: userInfo?.userId.toString(),
+        patientId: userInfo?.id.toString(),
         scheduleId: selectedSchedule.id,
         notes: notes,
       });
     }
+
     setIsModalOpen(false);
   };
 

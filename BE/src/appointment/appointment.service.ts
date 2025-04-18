@@ -25,7 +25,7 @@ export class AppointmentService {
     // Start transaction to ensure data consistency
     return await this.prisma.$transaction(async (tx) => {
       const currentUserRole = await tx.user.findUnique({
-        where: { id: userId },
+        where: { id: userId ?? patientId },
       });
 
       // Check if schedule is available
@@ -48,13 +48,13 @@ export class AppointmentService {
         data: { status: ScheduleStatus.BOOKED },
       });
 
-      const mappedPatientId =
-        currentUserRole.role === 'PATIENT' ? userId : patientId;
+      // const mappedPatientId =
+      //   currentUserRole.role === 'PATIENT' ? userId : patientId;
 
       // Create appointment
       const appointment = await tx.appointment.create({
         data: {
-          patientId: mappedPatientId,
+          patientId,
           doctorId: schedule.doctorId,
           scheduleId,
           status: 'SCHEDULED',

@@ -40,6 +40,13 @@ export class AppointmentController {
     );
   }
 
+  @Get(':id')
+  async getAppointmentById(
+    @Param('id') id: string,
+  ) {
+    return await this.appointmentService.findAppointmentById(id);
+  }
+
   @Patch(':id')
   async updateAppointment(
     @Param('id') id: string,

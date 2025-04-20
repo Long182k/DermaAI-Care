@@ -96,6 +96,7 @@ export interface Appointment {
   };
 }
 
+// Add this method to the appointmentApi object
 export const appointmentApi = {
   createAppointment: async (data: CreateAppointmentDto) => {
     const response = await axiosClient.post("/appointments", data);
@@ -106,4 +107,14 @@ export const appointmentApi = {
     const response = await axiosClient.get("/appointments/user");
     return response.data as Appointment[];
   },
+  
+  getAppointmentById: async (id: string) => {
+    const response = await axiosClient.get(`/appointments/${id}`);
+    return response.data as Appointment;
+  },
+
+  checkoutSession: async (id: string) => {
+    const response = await axiosClient.post(`/payment/create-checkout-session/${id}`);
+    return response.data;
+  }
 };

@@ -183,4 +183,21 @@ export class AppointmentService {
       }),
     ]);
   }
+
+  async findAppointmentById(id: string) {
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id },
+      include: {
+        Patient: true,
+        Doctor: true,
+        Schedule: true,
+      },
+    });
+    
+    if (!appointment) {
+      throw new ForbiddenException('Appointment not found');
+    }
+
+    return appointment;
+  }
 }

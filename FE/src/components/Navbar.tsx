@@ -41,10 +41,10 @@ export const Navbar = () => {
     mutationFn: logout,
     onSuccess: () => {
       toast({
-        title: "Login successful",
-        description: "You have been logged in.",
+        title: "Logout successful",
+        description: "You have been logout.",
       });
-      navigate("/");
+      navigate("/auth");
     },
     onError: (error: AxiosError<ErrorResponseData>) => {
       if (error.response?.status === 401) {

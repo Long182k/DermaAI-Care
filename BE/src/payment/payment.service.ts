@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import { PrismaService } from '../prisma.service';
 
@@ -29,6 +29,18 @@ export class PaymentService {
       throw new Error('Appointment not found');
     }
 
+    // Check if payment already exists for this appointment
+    const existingPayment = await this.prisma.payment.findFirst({
+      where: { 
+        appointmentId,
+        status: 'COMPLETED' 
+      },
+    });
+    
+    if (existingPayment) {
+      throw new BadRequestException('Payment already completed for this appointment');
+    }
+
     // Create a checkout session
     const session = await this.stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -56,20 +68,42 @@ export class PaymentService {
       },
     });
 
-    // // Create a payment record in the database
-    await this.prisma.payment.create({
-      data: {
-        userId: userId,
-        appointmentId: appointmentId,
-        amount: 20.0,
-        currency: 'USD',
-        status: 'PENDING',
-        paymentMethod: 'card',
-        transactionId: session.id
-      },
-    });
-
     return { sessionId: session.id, url: session.url };
+  }
+
+  async handleWebhookEvent(event: Stripe.Event) {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as Stripe.Checkout.Session;
+      
+      // Extract metadata from the session
+      const { appointmentId, userId } = session.metadata;
+      
+      // Check if payment already exists with this transaction ID
+      const existingPayment = await this.prisma.payment.findUnique({
+        where: { transactionId: session.id },
+      });
+      
+      if (!existingPayment) {
+        // Create payment record only after successful checkout
+        await this.prisma.payment.create({
+          data: {
+            userId,
+            appointmentId,
+            amount: session.amount_total / 100, // Convert from cents to dollars
+            currency: session.currency.toUpperCase(),
+            status: 'COMPLETED',
+            paymentMethod: 'card',
+            transactionId: session.id
+          },
+        });
+        
+        // Update appointment status to CONFIRMED or any appropriate status
+        await this.prisma.appointment.update({
+          where: { id: appointmentId },
+          data: { status: 'CONFIRMED' }
+        });
+      }
+    }
   }
 
   async getPaymentStatus(sessionId: string) {

@@ -14,6 +14,8 @@ import { CreditCard, Lock, Loader2 } from "lucide-react";
 import { appointmentApi, Appointment } from "@/api/appointment";
 import { format } from "date-fns";
 import {loadStripe} from '@stripe/stripe-js';
+import { toast } from "react-toastify";
+import { AxiosError } from "axios";
 
 const PaymentPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -33,9 +35,12 @@ const PaymentPage = () => {
       const stripe = await loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY!);
 
       // Redirect to Stripe Checkout
-      const result = stripe?.redirectToCheckout({
+      stripe?.redirectToCheckout({
         sessionId: data.sessionId ?? '',
       })
+    },
+    onError: (error: AxiosError) => {
+      toast.error((error.response?.data as { message: string })?.message || 'An error occurred');
     },
   });
 

@@ -98,7 +98,7 @@ export class AppointmentService {
 
   async findUserAppointments(userId: string, role: string) {
     const where =
-      role === 'DOCTOR' ? { doctorId: userId } : { patientId: userId };
+      role === 'DOCTOR' ? { doctorId: userId } : { patientId: userId, status: 'SCHEDULED' };
 
     return await this.prisma.appointment.findMany({
       where,

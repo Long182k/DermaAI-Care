@@ -23,6 +23,7 @@ import { StreamChat } from "stream-chat";
 import { Chat as StreamChatComponent } from "stream-chat-react";
 import { useEffect, useState } from "react";
 import { StreamVideo, StreamVideoClient, useStreamVideoClient } from "@stream-io/video-react-sdk"
+import { ToastContainer } from "react-toastify";
 
 // Initialize Stream Chat client
 const chatClient = StreamChat.getInstance(import.meta.env.VITE_STREAM_KEY!);
@@ -113,6 +114,7 @@ const App = () => {
           </StreamChatComponent>
           </StreamVideo>
         </BrowserRouter>
+        <ToastContainer/>
       </TooltipProvider>
     </QueryClientProvider>
   );

@@ -9,6 +9,7 @@ datasource db {
 
 model User {
   id                  String                 @id @default(uuid())
+  
   userName            String                 @unique
   firstName           String?
   lastName            String?
@@ -121,7 +122,7 @@ model Appointment {
   Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
   Reminders Reminder[]
   Schedule  Schedule   @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  Payments  Payment[]  // Added this relation field
+  Payments  Payment[]  
 
   @@index([patientId])
   @@index([doctorId])
@@ -176,7 +177,7 @@ model Review {
 model Payment {
   id            String   @id @default(uuid())
   userId        String
-  appointmentId String   // Added this missing field
+  appointmentId String   
   amount        Float
   currency      String
   status        String

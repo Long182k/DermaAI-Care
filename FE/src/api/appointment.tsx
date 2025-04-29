@@ -33,7 +33,7 @@ export interface CreateAppointmentDto {
 }
 
 export const doctorApi = {
-  getAllDoctors: async (page: number = 1, limit: number = 10) => {
+  getAllDoctors: async (page: number = 1, limit: number = 100) => {
     const response = await axiosClient.get(
       `/users/doctors?page=${page}&limit=${limit}`
     );
@@ -102,19 +102,21 @@ export const appointmentApi = {
     const response = await axiosClient.post("/appointments", data);
     return response.data;
   },
-  
+
   getUserAppointments: async () => {
     const response = await axiosClient.get("/appointments/user");
     return response.data as Appointment[];
   },
-  
+
   getAppointmentById: async (id: string) => {
     const response = await axiosClient.get(`/appointments/${id}`);
     return response.data as Appointment;
   },
 
   checkoutSession: async (id: string) => {
-    const response = await axiosClient.post(`/payment/create-checkout-session/${id}`);
+    const response = await axiosClient.post(
+      `/payment/create-checkout-session/${id}`
+    );
     return response.data;
-  }
+  },
 };

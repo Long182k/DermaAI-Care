@@ -32,17 +32,20 @@ export class PaymentController {
 
   @Public()
   @Post('webhook')
-  async handleWebhook(@Req() request: RawBodyRequest<Request>, @Headers('stripe-signature') signature: string) {
-    const payload = request.rawBody;    
-    
+  async handleWebhook(
+    @Req() request: RawBodyRequest<Request>,
+    @Headers('stripe-signature') signature: string,
+  ) {
+    const payload = request.rawBody;
+
     try {
       const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
       const event = stripe.webhooks.constructEvent(
         payload,
         signature,
-        process.env.STRIPE_WEBHOOK_SECRET
+        process.env.STRIPE_WEBHOOK_SECRET,
       );
-      
+
       await this.paymentService.handleWebhookEvent(event);
       return { received: true };
     } catch (err) {
@@ -52,9 +55,7 @@ export class PaymentController {
   }
 
   @Get('status/:sessionId')
-  async getPaymentStatus(
-    @Param('sessionId') sessionId: string,
-  ) {
+  async getPaymentStatus(@Param('sessionId') sessionId: string) {
     return this.paymentService.getPaymentStatus(sessionId);
   }
 }

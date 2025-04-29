@@ -46,9 +46,8 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
         "/auth/register",
         data
       );
-      console.log("🚀 response:", response);
-      set({ userInfo: response });
-      localStorage.setItem("access_token", response.accessToken);
+      // set({ userInfo: response });
+      // localStorage.setItem("access_token", response.accessToken);
       return response;
     } catch (error) {
       console.log("error", error);
@@ -56,7 +55,6 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
     }
   },
   login: async (data: LoginParams): Promise<LoginResponse> => {
-    console.log("data login", data);
     try {
       const { data: dataResponse } = await axiosInitialClient.post(
         "/auth/login",
@@ -76,8 +74,10 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
   logout: async () => {
     const { userInfo } = get();
 
+    const userId = userInfo.userId ?? userInfo.id;
+
     try {
-      await axiosInitialClient.post(`/auth/logout/${userInfo.userId}`);
+      await axiosInitialClient.post(`/auth/logout/${userId}`);
 
       set({
         userInfo: undefined,

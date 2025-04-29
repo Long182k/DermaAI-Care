@@ -27,7 +27,7 @@ export const ChatInterface = () => {
     channelId: string;
     callerName: string;
   } | null>(null);
-  const {userInfo} = useAppStore()
+  const { userInfo } = useAppStore();
 
   // Listen for incoming call messages
   useEffect(() => {
@@ -36,22 +36,26 @@ export const ChatInterface = () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleNewMessage = (event: any) => {
       const message = event.message;
-      
+
       // Check if this is a call notification
       if (message.call_notification) {
-        if (message.call_notification.status === 'started') {
+        if (message.call_notification.status === "started") {
           // Don't show notification if we initiated the call
           if (message.user.id === client.userID) return;
-          
+
           // Show incoming call notification
           setIncomingCall({
             callId: message.call_notification.call_id,
             channelId: channel.id,
-            callerName: message.user.name || 'Someone',
+            callerName: message.user.name || "Someone",
           });
-        } else if (message.call_notification.status === 'ended') {
+        } else if (message.call_notification.status === "ended") {
           // If the call has ended and it matches our active call
-          if (activeCall && message.call_notification.call_id === activeCall.id) {
+          if (
+            activeCall &&
+            message.call_notification.call_id === activeCall.id
+          ) {
+          
             // Close the call modal and reset call state
             setShowCallModal(false);
             setActiveCall(null);
@@ -61,11 +65,11 @@ export const ChatInterface = () => {
     };
 
     // Subscribe to new messages
-    channel.on('message.new', handleNewMessage);
+    channel.on("message.new", handleNewMessage);
 
     // Cleanup
     return () => {
-      channel.off('message.new', handleNewMessage);
+      channel.off("message.new", handleNewMessage);
     };
   }, [channel, client.userID, activeCall]);
 
@@ -104,7 +108,7 @@ export const ChatInterface = () => {
 
   const handleDeclineCall = async () => {
     setIncomingCall(null);
-    
+
     // Optionally send a message that the call was declined
     if (channel && incomingCall) {
       await channel.sendMessage({
@@ -130,7 +134,11 @@ export const ChatInterface = () => {
           <div className="min-w-[750px]">
             <Window>
               <div className="flex flex-col h-full">
-                <CustomChannelHeader userInfo={userInfo} channel={channel} handleStartCall={handleStartCall}/>
+                <CustomChannelHeader
+                  userInfo={userInfo}
+                  channel={channel}
+                  handleStartCall={handleStartCall}
+                />
                 <MessageList />
                 <MessageInput />
               </div>
@@ -140,9 +148,7 @@ export const ChatInterface = () => {
         </Channel>
       </div>
       <SharedMedia />
-      {showCallModal && activeCall && (
-        <VideoCallModal call={activeCall} />
-      )}
+      {showCallModal && activeCall && <VideoCallModal call={activeCall} />}
       {incomingCall && (
         <IncomingCallNotification
           channelId={incomingCall.channelId}

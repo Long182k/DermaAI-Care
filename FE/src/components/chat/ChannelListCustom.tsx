@@ -10,7 +10,6 @@ export function ChannelListCustom({
 }: ChannelListMessengerProps) {
   const { setActiveChannel, channel: activeChannel } = useChatContext();
   const { client } = useChatContext();
-  
 
   const createChannel = useMutation({
     mutationFn: ({
@@ -46,6 +45,7 @@ export function ChannelListCustom({
     queryFn: () => doctorApi.getAllDoctors(),
     select: (res) => res.doctors,
   });
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDoctorId, setSelectedDoctorId] = useState<
     string | undefined
@@ -135,11 +135,6 @@ export function ChannelListCustom({
               ? "bg-accent text-white"
               : "cursor-pointer hover:bg-accent";
 
-            const selectedDoctor = doctors.find(
-              (d) =>
-                capitalizeWords(`Dr. ${d?.firstName} ${d?.lastName}`) ===
-                channel.data?.name
-            );
             return (
               <button
                 onClick={() => setActiveChannel(channel)}

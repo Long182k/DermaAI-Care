@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import { PrismaService } from '../prisma.service';
+import { MailerService } from '@nestjs-modules/mailer';
 
 @Injectable()
 export class PaymentService {
@@ -8,10 +9,9 @@ export class PaymentService {
 
   constructor(
     private prisma: PrismaService,
+    private readonly mailerService: MailerService,
   ) {
-    this.stripe = new Stripe(
-      process.env.STRIPE_SECRET_KEY
-    );
+    this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   }
 
   async createCheckoutSession(appointmentId: string, userId: string) {
@@ -31,14 +31,16 @@ export class PaymentService {
 
     // Check if payment already exists for this appointment
     const existingPayment = await this.prisma.payment.findFirst({
-      where: { 
+      where: {
         appointmentId,
-        status: 'COMPLETED' 
+        status: 'COMPLETED',
       },
     });
-    
+
     if (existingPayment) {
-      throw new BadRequestException('Payment already completed for this appointment');
+      throw new BadRequestException(
+        'Payment already completed for this appointment',
+      );
     }
 
     // Create a checkout session
@@ -68,21 +70,47 @@ export class PaymentService {
       },
     });
 
-    return { sessionId: session.id, url: session.url };
+    if (session) {
+      await this.mailerService.sendMail({
+        to: appointment.Patient.email,
+        subject: `Payment Confirmation for Appointment with Dr. ${appointment.Doctor.userName}`,
+        template: 'payment-confirmation',
+        context: {
+          patientName: appointment.Patient.userName,
+          doctorName: appointment.Doctor.userName,
+          amount: (session.amount_total / 100).toFixed(2),
+          transactionId: session.id,
+          paymentDate: new Date().toLocaleDateString(),
+          appointmentStartTime: new Date(
+            appointment.Schedule.startTime,
+          ).toLocaleString(),
+          appointmentEndTime: new Date(
+            appointment.Schedule.endTime,
+          ).toLocaleString(),
+          appointmentUrl: `${process.env.FRONTEND_URL}/appointments`,
+          doctorEmail: appointment.Doctor.email,
+          doctorAvatar:
+            appointment.Doctor.avatarUrl || 'https://via.placeholder.com/80',
+          year: new Date().getFullYear(),
+        },
+      });
+
+      return { sessionId: session.id, url: session.url };
+    }
   }
 
   async handleWebhookEvent(event: Stripe.Event) {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as Stripe.Checkout.Session;
-      
+
       // Extract metadata from the session
       const { appointmentId, userId } = session.metadata;
-      
+
       // Check if payment already exists with this transaction ID
       const existingPayment = await this.prisma.payment.findUnique({
         where: { transactionId: session.id },
       });
-      
+
       if (!existingPayment) {
         // Create payment record only after successful checkout
         await this.prisma.payment.create({
@@ -93,14 +121,14 @@ export class PaymentService {
             currency: session.currency.toUpperCase(),
             status: 'COMPLETED',
             paymentMethod: 'card',
-            transactionId: session.id
+            transactionId: session.id,
           },
         });
-        
+
         // Update appointment status to CONFIRMED or any appropriate status
         await this.prisma.appointment.update({
           where: { id: appointmentId },
-          data: { status: 'CONFIRMED' }
+          data: { status: 'CONFIRMED' },
         });
       }
     }
@@ -110,7 +138,7 @@ export class PaymentService {
     const payment = await this.prisma.payment.findUnique({
       where: { transactionId: sessionId },
     });
-    
+
     return payment;
   }
 }

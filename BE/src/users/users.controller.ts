@@ -30,7 +30,7 @@ export class UsersController {
   }
 
   @Get('/doctors')
-  findAllDoctors() {
+  findAllDoctors(@CurrentUser() currentUser: any) {
     return this.usersService.findAllDoctors();
   }
 

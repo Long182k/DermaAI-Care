@@ -33,6 +33,21 @@ interface RegisterFormProps {
 export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
   const { toast } = useToast();
   const [date, setDate] = useState<Date>();
+  const [calendarViewDate, setCalendarViewDate] = useState<Date>(new Date());
+  const [confirmPassword, setConfirmPassword] = useState<string>("");
+
+  // Handler for when the calendar's month or year changes
+  const handleMonthYearChange = (newMonth: Date) => {
+    setCalendarViewDate(newMonth);
+    // If no date is selected or the selected date is not in the new month/year, update to first day of month
+    if (
+      !date ||
+      date.getMonth() !== newMonth.getMonth() ||
+      date.getFullYear() !== newMonth.getFullYear()
+    ) {
+      setDate(new Date(newMonth.getFullYear(), newMonth.getMonth(), 1));
+    }
+  };
 
   const { signup } = useAppStore();
   const navigate = useNavigate();
@@ -51,12 +66,23 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Check if passwords match
+    if (formData.password !== confirmPassword) {
+      toast({
+        title: "Password mismatch",
+        description: "Password and confirm password do not match.",
+        variant: "destructive",
+      });
+      return; // Prevent form submission
+    }
+
     try {
       registerMutation.mutate({
         ...formData,
         dateOfBirth: date,
         userName: formData.lastName,
-        role: "PATIENT"
+        role: "PATIENT",
       });
 
       toast({
@@ -79,25 +105,20 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
         title: "Register successful",
         description: "You have been registered successful.",
       });
-      navigate("/");
 
-      // Navigate based on role
-      // if (res.role === "ADMIN") {
-      //   navigate("/dashboard");
-      // } else {
-      //   navigate("/");
-      // }
+      // Use window.location.href to navigate and refresh the page
+      window.location.href = "/auth";
     },
     onError: (error: AxiosError<ErrorResponseData>) => {
-      if (error.response?.status === 401) {
-        const message = error.response?.data?.message;
+      const { statusCode, message } = error.response.data;
+      if (statusCode === 400) {
         toast({
-          title: "Login failed",
+          title: "Register failed",
           description: message,
         });
       } else {
         toast({
-          title: "Login failed",
+          title: "Register failed",
           description: "Try Again",
         });
       }
@@ -190,6 +211,8 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
               type="password"
               placeholder="••••••••"
               required
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
             />
           </div>
         </div>
@@ -215,29 +238,98 @@ export const RegisterForm = ({ onToggle }: RegisterFormProps) => {
 
         <div className="space-y-2">
           <Label>Date of birth</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                className={cn(
-                  "w-full justify-start text-left font-normal",
-                  !date && "text-muted-foreground"
-                )}
-              >
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {date ? format(date, "PPP") : <span>Pick a date</span>}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={date}
-                onSelect={setDate}
-                initialFocus
-              />
-            </PopoverContent>
-          </Popover>
+          <div className="grid grid-cols-3 gap-2">
+            <Select
+              value={date ? date.getDate().toString() : ""}
+              onValueChange={(value) => {
+                const newDate = new Date(
+                  date ? date.getTime() : new Date().getTime()
+                );
+                newDate.setDate(parseInt(value));
+                setDate(newDate);
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Day" />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
+                  <SelectItem key={day} value={day.toString()}>
+                    {day}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={date ? date.getMonth().toString() : ""}
+              onValueChange={(value) => {
+                const newDate = new Date(
+                  date ? date.getTime() : new Date().getTime()
+                );
+                newDate.setMonth(parseInt(value));
+                setDate(newDate);
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Month" />
+              </SelectTrigger>
+              <SelectContent>
+                {[
+                  "January",
+                  "February",
+                  "March",
+                  "April",
+                  "May",
+                  "June",
+                  "July",
+                  "August",
+                  "September",
+                  "October",
+                  "November",
+                  "December",
+                ].map((month, index) => (
+                  <SelectItem key={month} value={index.toString()}>
+                    {month}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={date ? date.getFullYear().toString() : ""}
+              onValueChange={(value) => {
+                const newDate = new Date(
+                  date ? date.getTime() : new Date().getTime()
+                );
+                newDate.setFullYear(parseInt(value));
+                setDate(newDate);
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Year" />
+              </SelectTrigger>
+              <SelectContent className="max-h-[200px] overflow-y-auto">
+                {Array.from(
+                  { length: new Date().getFullYear() - 1900 + 1 },
+                  (_, i) => new Date().getFullYear() - i
+                ).map((year) => (
+                  <SelectItem key={year} value={year.toString()}>
+                    {year}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {date && (
+            <p className="text-sm text-muted-foreground mt-1">
+              {format(date, "PPP")}
+            </p>
+          )}
         </div>
+
+        <div className="space-y-2"></div>
 
         <Button type="submit" className="w-full">
           Create account

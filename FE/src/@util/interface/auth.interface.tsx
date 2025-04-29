@@ -10,7 +10,14 @@ export interface RegisterFormProp {
 }
 
 export interface ErrorResponseData {
-  message: string;
+  // '{"message":"User already exist","error":"Bad Request","statusCode":400}',
+
+  response: {
+    data: {
+      message: string;
+      statusCode: number;
+    };
+  };
 }
 
 export type LoginResponse = {

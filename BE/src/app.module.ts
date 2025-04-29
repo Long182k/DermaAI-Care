@@ -14,6 +14,8 @@ import { UsersModule } from './users/users.module';
 import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
 import { AppointmentModule } from './appointment/appointment.module';
 import { ScheduleModule } from './schedule/schedule.module';
+import { PaymentModule } from './payment/payment.module';
+import { PaymentController } from './payment/payment.controller';
 
 @Module({
   imports: [
@@ -26,8 +28,9 @@ import { ScheduleModule } from './schedule/schedule.module';
     NestScheduleModule.forRoot(),
     AppointmentModule,
     ScheduleModule,
+    PaymentModule,
   ],
-  controllers: [UsersController],
+  controllers: [UsersController, PaymentController],
   providers: [
     PrismaService,
     {

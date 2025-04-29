@@ -22,24 +22,31 @@ import { useAppStore } from "./store";
 import { StreamChat } from "stream-chat";
 import { Chat as StreamChatComponent } from "stream-chat-react";
 import { useEffect, useState } from "react";
-import { StreamVideo, StreamVideoClient, useStreamVideoClient } from "@stream-io/video-react-sdk"
+import {
+  StreamVideo,
+  StreamVideoClient,
+  useStreamVideoClient,
+} from "@stream-io/video-react-sdk";
+import { ToastContainer } from "react-toastify";
 
 // Initialize Stream Chat client
 const chatClient = StreamChat.getInstance(import.meta.env.VITE_STREAM_KEY!);
-const videoClient = new StreamVideoClient({ apiKey: import.meta.env.VITE_STREAM_KEY! });
-
+const videoClient = new StreamVideoClient({
+  apiKey: import.meta.env.VITE_STREAM_KEY!,
+});
 
 const queryClient = new QueryClient();
 const App = () => {
   const { userInfo } = useAppStore();
   const [clientReady, setClientReady] = useState(false);
+  const userId = userInfo?.userId ?? userInfo?.id;
 
   useEffect(() => {
     if (!userInfo) return;
 
     if (
       chatClient.tokenManager.token === userInfo.streamToken &&
-      chatClient.userID === userInfo.userId
+      chatClient.userID === userId
     )
       return;
 
@@ -48,9 +55,10 @@ const App = () => {
       try {
         const token = userInfo.streamToken;
 
+
         await chatClient.connectUser(
           {
-            id: userInfo.userId,
+            id: userId,
             name: userInfo.userName,
             image: userInfo.avatarUrl,
           },
@@ -59,7 +67,7 @@ const App = () => {
 
         await videoClient.connectUser(
           {
-            id: userInfo.userId,
+            id: userId,
             name: userInfo.userName,
             image: userInfo.avatarUrl,
           },
@@ -79,10 +87,12 @@ const App = () => {
     return () => {
       // Disconnect when component unmounts
       chatClient.disconnectUser();
-      videoClient.disconnectUser()
+      videoClient.disconnectUser();
       setClientReady(false);
     };
-  }, [userInfo, userInfo.avatarUrl, userInfo.id, userInfo.streamToken, userInfo.userName]);
+
+    // Add userInfo.avatarUrl
+  }, [userInfo, userId, userInfo?.streamToken, userInfo?.userName]);
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -90,29 +100,33 @@ const App = () => {
         <Toaster />
         <Sonner />
         <BrowserRouter>
-        <StreamVideo client={videoClient}>
-          <StreamChatComponent client={chatClient}>
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/about" element={<About />} />
-              <Route path="/services" element={<Services />} />
-              <Route path="/doctors" element={<Doctors />} />
-              <Route path="/doctor/:id" element={<DoctorProfile />} />
-              <Route path="/book-appointment/:id" element={<DoctorProfile />} />
-              <Route path="/contact" element={<Contact />} />
-              <Route path="/analysis" element={<Analysis />} />
-              <Route path="/booking" element={<Booking />} />
-              <Route path="/chat" element={<Chat />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/privacy" element={<Privacy />} />
-              <Route path="/appointments" element={<AppointmentsPage />} />
-              <Route path="/payment/:id" element={<PaymentPage />} />
-              <Route path="/analysis" element={<AnalysisPage />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </StreamChatComponent>
+          <StreamVideo client={videoClient}>
+            <StreamChatComponent client={chatClient}>
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/about" element={<About />} />
+                <Route path="/services" element={<Services />} />
+                <Route path="/doctors" element={<Doctors />} />
+                <Route path="/doctor/:id" element={<DoctorProfile />} />
+                <Route
+                  path="/book-appointment/:id"
+                  element={<DoctorProfile />}
+                />
+                <Route path="/contact" element={<Contact />} />
+                <Route path="/analysis" element={<Analysis />} />
+                <Route path="/booking" element={<Booking />} />
+                <Route path="/chat" element={<Chat />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/privacy" element={<Privacy />} />
+                <Route path="/appointments" element={<AppointmentsPage />} />
+                <Route path="/payment/:id" element={<PaymentPage />} />
+                <Route path="/analysis" element={<AnalysisPage />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </StreamChatComponent>
           </StreamVideo>
         </BrowserRouter>
+        <ToastContainer />
       </TooltipProvider>
     </QueryClientProvider>
   );

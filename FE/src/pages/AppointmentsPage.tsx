@@ -4,13 +4,26 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Calendar as CalendarIcon } from "lucide-react";
 import { appointmentApi, Appointment } from "@/api/appointment";
-import { format } from "date-fns";
+import { format, isToday, isThisWeek, isThisMonth } from "date-fns";
+import { useNavigate } from "react-router-dom";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+// Define filter types
+type FilterType = "day" | "week" | "month" | "all";
 
 const AppointmentsPage = () => {
   const [activeTab, setActiveTab] = useState("upcoming");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterType>("all");
+
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchAppointments = async () => {
@@ -31,16 +44,36 @@ const AppointmentsPage = () => {
   }, []);
 
   // Filter appointments based on status and date
-  const upcomingAppointments = appointments.filter(
-    (appointment) =>
-      appointment.status === "SCHEDULED" ||
-      appointment.status === "CONFIRMED" ||
-      appointment.status === "PENDING"
+  const filterAppointmentsByDate = (appointments: Appointment[]) => {
+    return appointments.filter((appointment) => {
+      const appointmentDate = new Date(appointment.Schedule.startTime);
+
+      switch (filter) {
+        case "day":
+          return isToday(appointmentDate);
+        case "week":
+          return isThisWeek(appointmentDate);
+        case "month":
+          return isThisMonth(appointmentDate);
+        case "all":
+        default:
+          return true;
+      }
+    });
+  };
+  // Filter appointments based on status
+  const upcomingAppointments = filterAppointmentsByDate(
+    appointments.filter(
+      (appointment) =>
+        appointment.status === "SCHEDULED" || appointment.status === "PENDING"
+    )
   );
 
-  const pastAppointments = appointments.filter(
-    (appointment) =>
-      appointment.status === "COMPLETED" || appointment.status === "CANCELLED"
+  const pastAppointments = filterAppointmentsByDate(
+    appointments.filter(
+      (appointment) =>
+        appointment.status === "CONFIRMED" || appointment.status === "CANCELLED"
+    )
   );
 
   const handleReschedule = (id: string) => {
@@ -96,6 +129,20 @@ const AppointmentsPage = () => {
     }
   };
 
+  const getFilterLabel = () => {
+    switch (filter) {
+      case "day":
+        return "Day View";
+      case "week":
+        return "Week View";
+      case "month":
+        return "Month View";
+      case "all":
+      default:
+        return "All Schedules";
+    }
+  };
+
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-20">
@@ -120,29 +167,88 @@ const AppointmentsPage = () => {
 
   return (
     <div className="container mx-auto px-4 py-20">
-      <h1 className="text-3xl font-bold mb-6">My Appointments</h1>
-
-      <Tabs defaultValue="upcoming" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 mb-8">
-          <TabsTrigger
-            value="upcoming"
-            onClick={() => setActiveTab("upcoming")}
+      <div className="flex items-center mb-6">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="mr-2"
+          onClick={() => navigate("/services")}
+          aria-label="Back"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="h-6 w-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
           >
-            Upcoming Appointments
-          </TabsTrigger>
-          <TabsTrigger value="history" onClick={() => setActiveTab("history")}>
-            Appointment History
-          </TabsTrigger>
-        </TabsList>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M15 19l-7-7 7-7"
+            />
+          </svg>
+        </Button>
+        <h1 className="text-3xl font-bold">My Appointments</h1>
+      </div>
 
+      <div className="mb-6">
+        <Tabs value={activeTab} className="w-full">
+          <div className="flex justify-between items-center">
+            <TabsList className="grid w-[calc(100%-120px)] grid-cols-2">
+              <TabsTrigger
+                value="upcoming"
+                onClick={() => setActiveTab("upcoming")}
+              >
+                Upcoming Appointments
+              </TabsTrigger>
+              <TabsTrigger
+                value="history"
+                onClick={() => setActiveTab("history")}
+              >
+                Appointment History
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Filter dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[120px]">
+                  {getFilterLabel()}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setFilter("day")}>
+                  Day View
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setFilter("week")}>
+                  Week View
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setFilter("month")}>
+                  Month View
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setFilter("all")}>
+                  All Schedules
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </Tabs>
+      </div>
+
+      <Tabs value={activeTab} className="w-full">
         <TabsContent value="upcoming" className="space-y-4">
           {upcomingAppointments.length === 0 ? (
             <Card>
               <CardContent className="py-10 text-center">
                 <p className="text-muted-foreground">
-                  You have no upcoming appointments.
+                  You have no upcoming appointments
+                  {filter !== "all" ? ` for this ${filter}` : ""}.
                 </p>
-                <Button className="mt-4">Book Appointment</Button>
+                <Button className="mt-4" onClick={() => navigate("/doctors")}>
+                  Book Appointment
+                </Button>
               </CardContent>
             </Card>
           ) : (
@@ -212,7 +318,8 @@ const AppointmentsPage = () => {
             <Card>
               <CardContent className="py-10 text-center">
                 <p className="text-muted-foreground">
-                  You have no appointment history.
+                  You have no appointment history
+                  {filter !== "all" ? ` for this ${filter}` : ""}.
                 </p>
               </CardContent>
             </Card>

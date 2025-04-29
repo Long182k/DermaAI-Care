@@ -98,6 +98,9 @@ importers:
       stream-chat:
         specifier: ^8.60.0
         version: 8.60.0
+      stripe:
+        specifier: ^18.0.0
+        version: 18.0.0
       uuid:
         specifier: ^10.0.0
         version: 10.0.0
@@ -4200,6 +4203,10 @@ packages:
   strip-outer@2.0.0:
     resolution: {integrity: sha512-A21Xsm1XzUkK0qK1ZrytDUvqsQWict2Cykhvi0fBQntGG5JSprESasEyV1EZ/4CiR5WB5KjzLTrP/bO37B0wPg==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
+  stripe@18.0.0:
+    resolution: {integrity: sha512-3Fs33IzKUby//9kCkCa1uRpinAoTvj6rJgQ2jrBEysoxEvfsclvXdna1amyEYbA2EKkjynuB4+L/kleCCaWTpA==}
+    engines: {node: '>=12.*'}
 
   strtok3@7.1.1:
     resolution: {integrity: sha512-mKX8HA/cdBqMKUr0MMZAFssCkIGoZeSCMXgnt79yKxNFguMLVFgRe6wB+fsL0NmoHDbeyZXczy7vEPSoo3rkzg==}
@@ -9657,6 +9664,11 @@ snapshots:
   strip-json-comments@3.1.1: {}
 
   strip-outer@2.0.0: {}
+
+  stripe@18.0.0:
+    dependencies:
+      '@types/node': 20.17.10
+      qs: 6.13.1
 
   strtok3@7.1.1:
     dependencies:

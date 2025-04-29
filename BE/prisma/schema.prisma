@@ -9,6 +9,7 @@ datasource db {
 
 model User {
   id                  String                 @id @default(uuid())
+  
   userName            String                 @unique
   firstName           String?
   lastName            String?
@@ -121,6 +122,7 @@ model Appointment {
   Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
   Reminders Reminder[]
   Schedule  Schedule   @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  Payments  Payment[]  
 
   @@index([patientId])
   @@index([doctorId])
@@ -175,14 +177,16 @@ model Review {
 model Payment {
   id            String   @id @default(uuid())
   userId        String
+  appointmentId String   
   amount        Float
   currency      String
   status        String
   paymentMethod String
-  transactionId String
+  transactionId String   @unique
   createdAt     DateTime @default(now())
 
-  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  User        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  Appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])

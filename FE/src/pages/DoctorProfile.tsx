@@ -65,12 +65,12 @@ const DoctorProfile = () => {
   // Function to handle booking appointment after notes are added
   const handleBookAppointment = () => {
     if (selectedSchedule) {
-      console.log("🚀 selectedSchedule:", selectedSchedule);
-      console.log("userInfo?.id", userInfo?.id);
+      const userId = userInfo?.userId ?? userInfo?.id;
+
       // Clear schedule ID from URL before navigating
       window.history.pushState({}, "", window.location.pathname);
       createAppointmentMutation.mutate({
-        patientId: userInfo?.id.toString(),
+        patientId: userId,
         scheduleId: selectedSchedule.id,
         notes: notes,
       });
@@ -224,13 +224,6 @@ const DoctorProfile = () => {
                   alt={`${doctor.firstName || ""} ${doctor.lastName || ""}`}
                   className="w-full rounded-lg shadow-lg mb-4"
                 />
-                <div className="flex items-center justify-center mb-4">
-                  <span className="text-yellow-400 text-xl">★</span>
-                  <span className="ml-1 font-semibold text-lg">4.9</span>
-                  <span className="text-muted-foreground ml-1">
-                    (128 reviews)
-                  </span>
-                </div>
               </div>
 
               <div className="md:col-span-2">
@@ -370,7 +363,7 @@ const DoctorProfile = () => {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {schedulesByDay &&
                     Object.entries(schedulesByDay).map(
                       ([day, daySchedules]) => {
@@ -387,48 +380,61 @@ const DoctorProfile = () => {
                             new Date(b.startTime).getTime()
                         );
 
-                        const earliestTime = sortedSchedules[0].startTime;
-                        const latestTime =
-                          sortedSchedules[sortedSchedules.length - 1].endTime;
-
-                        // Check if schedule is booked
-                        const isBooked = sortedSchedules[0].status === "BOOKED";
-
                         return (
-                          <div
-                            key={day}
-                            className={`p-6 rounded-lg border bg-card ${
-                              isBooked
-                                ? "opacity-70 cursor-not-allowed"
-                                : "hover:shadow-md cursor-pointer"
-                            } transition-shadow`}
-                            onClick={() => {
-                              // Only allow selection if not booked
-                              if (!isBooked) {
-                                const schedule = sortedSchedules[0];
-                                handleScheduleSelect(schedule);
-                              } else {
-                                toast({
-                                  title: "Schedule unavailable",
-                                  description:
-                                    "This time slot is already booked.",
-                                  variant: "destructive",
-                                });
-                              }
-                            }}
-                          >
-                            <h3 className="font-semibold text-lg mb-2">
-                              {day}
+                          <div key={day} className="mb-6">
+                            <h3 className="font-semibold text-lg mb-3">
+                              {day}{" "}
+                              {sortedSchedules.length > 0 && (
+                                <span className="font-normal text-muted-foreground ml-2">
+                                  {format(
+                                    parseISO(sortedSchedules[0].startTime),
+                                    "MMM d, yyyy"
+                                  )}
+                                </span>
+                              )}
                             </h3>
-                            <p className="text-muted-foreground">
-                              {format(parseISO(earliestTime), "h:mm a")} -{" "}
-                              {format(parseISO(latestTime), "h:mm a")}
-                            </p>
-                            {isBooked && (
-                              <p className="text-red-500 mt-2 text-sm font-medium">
-                                Booked
-                              </p>
-                            )}
+                            <div className="grid grid-cols-2 gap-2">
+                              {sortedSchedules.map((schedule) => (
+                                <div
+                                  key={schedule.id}
+                                  className={`p-3 rounded-lg border bg-card w-full min-w-[150px] ${
+                                    schedule.status === "BOOKED"
+                                      ? "opacity-70 cursor-not-allowed"
+                                      : "hover:shadow-md cursor-pointer"
+                                  } transition-shadow`}
+                                  onClick={() => {
+                                    // Only allow selection if not booked
+                                    if (schedule.status !== "BOOKED") {
+                                      handleScheduleSelect(schedule);
+                                    } else {
+                                      toast({
+                                        title: "Schedule unavailable",
+                                        description:
+                                          "This time slot is already booked.",
+                                        variant: "destructive",
+                                      });
+                                    }
+                                  }}
+                                >
+                                  <p className="text-muted-foreground whitespace-nowrap">
+                                    {format(
+                                      parseISO(schedule.startTime),
+                                      "h:mm a"
+                                    )}{" "}
+                                    -{" "}
+                                    {format(
+                                      parseISO(schedule.endTime),
+                                      "h:mm a"
+                                    )}
+                                  </p>
+                                  {schedule.status === "BOOKED" && (
+                                    <p className="text-red-500 mt-1 text-sm font-medium">
+                                      Booked
+                                    </p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         );
                       }

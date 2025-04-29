@@ -92,13 +92,31 @@ export class AuthService {
     const { accessToken, refreshToken } =
       await this.generateTokens(createUserDto);
 
+    // Check for existing user
+    const existingUser = await this.usersService.findUserByKeyword({
+      email: createUserDto.email,
+    });
+
+    if (existingUser) {
+      throw new BadRequestException('User already exist');
+    }
+
     const result = await this.userRepository.createUser(createUserDto);
+
+    const hashedRefreshToke = await argon.hash(refreshToken);
+    const payloadUpdate: UpdateHashedRefreshTokenDTO = {
+      userId: result.id,
+      hashedRefreshToken: hashedRefreshToke,
+    };
+
+    await this.usersService.updateHashedRefreshToken(payloadUpdate);
 
     // check for existing user
     const existingUsers = await streamChat.queryUsers({ id: result.id });
     if (existingUsers.users.length > 0) {
       throw new BadRequestException('User already exist in stream chat');
     }
+
     await streamChat.upsertUser({
       id: result.id,
       name: result.userName,
@@ -167,6 +185,7 @@ export class AuthService {
   }
 
   async validateJWTUser(userId: string) {
+    console.log('🚀 userId validateJWTUser:', userId);
     const user = await this.usersService.findUserByKeyword({ id: userId });
 
     if (!user || !user.hashedRefreshToken) {

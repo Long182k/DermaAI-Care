@@ -50,6 +50,7 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.1",
     "stream-chat": "^8.60.0",
+    "stripe": "^18.0.0",
     "uuid": "^10.0.0"
   },
   "devDependencies": {

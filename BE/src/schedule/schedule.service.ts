@@ -27,9 +27,9 @@ export class ScheduleService {
             const slotStart = currentDate
               .clone()
               .set({ hour, minute, second: 0, millisecond: 0 });
-            
+
             const slotEnd = slotStart.clone().add(30, 'minutes');
-            
+
             schedules.push({
               doctorId,
               startTime: slotStart.toISOString(),
@@ -45,9 +45,9 @@ export class ScheduleService {
             const slotStart = currentDate
               .clone()
               .set({ hour, minute, second: 0, millisecond: 0 });
-            
+
             const slotEnd = slotStart.clone().add(30, 'minutes');
-            
+
             schedules.push({
               doctorId,
               startTime: slotStart.toISOString(),
@@ -64,10 +64,10 @@ export class ScheduleService {
   }
 
   async findDoctorSchedules(
-    doctorId: string, 
-    startDate: Date, 
+    doctorId: string,
+    startDate: Date,
     endDate: Date,
-    filter?: 'day' | 'week' | 'month'
+    filter?: 'day' | 'week' | 'month',
   ) {
     let adjustedStartDate = new Date(startDate);
     let adjustedEndDate = new Date(endDate);
@@ -75,7 +75,7 @@ export class ScheduleService {
     // Apply filter if provided
     if (filter) {
       const start = moment(startDate);
-      
+
       switch (filter) {
         case 'day':
           adjustedStartDate = start.startOf('day').toDate();
@@ -119,9 +119,9 @@ export class ScheduleService {
     if (!schedule) {
       throw new ForbiddenException('Schedule not found');
     }
-
+    const userId = currentUser.id ?? currentUser.userId;
     // Check if user has permission to update
-    if (currentUser.role !== 'ADMIN' && schedule.doctorId !== currentUser.id) {
+    if (currentUser.role !== 'ADMIN' && schedule.doctorId !== userId) {
       throw new ForbiddenException(
         'You do not have permission to update this schedule',
       );

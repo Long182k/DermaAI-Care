@@ -27,10 +27,6 @@ export class UserRepository {
         },
       });
 
-      if (!user) {
-        throw new NotFoundException('User not found.');
-      }
-
       return user;
     }
   }
@@ -45,7 +41,7 @@ export class UserRepository {
 
   async findAllDoctors(
     page: number = 1,
-    limit: number = 10,
+    limit: number = 100,
   ): Promise<{ doctors: User[]; total: number; page: number; limit: number }> {
     const skip = (page - 1) * limit;
 

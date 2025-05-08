@@ -31,6 +31,7 @@ import {
   Legend,
 } from "chart.js";
 import { Line, Bar, Pie, Doughnut } from "react-chartjs-2";
+import type { PaymentStats } from "@/api/statistics";
 
 // Register ChartJS components
 ChartJS.register(
@@ -160,19 +161,31 @@ const AdminDashboard = () => {
     queryFn: statisticsApi.getAppointments,
   });
 
+  // Fetch payment statistics
+  const {
+    data: paymentData,
+    isLoading: isLoadingPayments,
+    error: paymentsError,
+  } = useQuery({
+    queryKey: ["statistics", "payments"],
+    queryFn: statisticsApi.getPayments,
+  });
+
   const isLoading =
     isLoadingOverview ||
     isLoadingPatients ||
     isLoadingDoctors ||
     isLoadingPredictions ||
-    isLoadingAppointments;
+    isLoadingAppointments ||
+    isLoadingPayments;
 
   const hasError =
     overviewError ||
     patientsError ||
     doctorsError ||
     predictionsError ||
-    appointmentsError;
+    appointmentsError ||
+    paymentsError;
 
   // Prepare chart data for overview
   const prepareMonthlyOverviewData = () => {
@@ -334,6 +347,66 @@ const AdminDashboard = () => {
     };
   };
 
+  // Prepare data for Appointments by Day
+  const prepareAppointmentsByDayData = (data) => {
+    if (!data?.charts?.appointmentsByDay) return null;
+    const labels = data.charts.appointmentsByDay.map((item) => item.day);
+    const counts = data.charts.appointmentsByDay.map((item) => item.count);
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Appointments",
+          data: counts,
+          backgroundColor: "rgba(34, 197, 94, 0.5)",
+          borderColor: "rgba(34, 197, 94, 1)",
+          borderWidth: 1,
+        },
+      ],
+    };
+  };
+
+  const appointmentsByDayData = prepareAppointmentsByDayData(appointmentData);
+
+  // Prepare payments by day chart data
+  const preparePaymentsByDayData = (data: PaymentStats | undefined) => {
+    if (!data?.charts?.paymentsByDay) return null;
+    const labels = data.charts.paymentsByDay.map((item) => item.day);
+    const counts = data.charts.paymentsByDay.map((item) => item.count);
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Payments",
+          data: counts,
+          backgroundColor: "rgba(251, 191, 36, 0.5)",
+          borderColor: "rgba(251, 191, 36, 1)",
+          borderWidth: 1,
+        },
+      ],
+    };
+  };
+  const paymentsByDayData = preparePaymentsByDayData(paymentData);
+
+  // Prepare monthly payments chart data
+  const prepareMonthlyPaymentsData = (data: PaymentStats | undefined) => {
+    if (!data?.charts?.monthlyPayments) return null;
+    const { labels, data: monthlyData } = data.charts.monthlyPayments;
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Payments",
+          data: monthlyData,
+          backgroundColor: "rgba(251, 191, 36, 0.5)",
+          borderColor: "rgba(251, 191, 36, 1)",
+          borderWidth: 1,
+        },
+      ],
+    };
+  };
+  const monthlyPaymentsData = prepareMonthlyPaymentsData(paymentData);
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background">
@@ -491,7 +564,7 @@ const AdminDashboard = () => {
 
         {/* Detailed Statistics Tabs */}
         <Tabs defaultValue="patients" className="w-full">
-          <TabsList className="grid grid-cols-4 mb-8">
+          <TabsList className="grid grid-cols-5 mb-8">
             <TabsTrigger value="patients" className="text-sm md:text-base">
               Patients
             </TabsTrigger>
@@ -503,6 +576,9 @@ const AdminDashboard = () => {
             </TabsTrigger>
             <TabsTrigger value="appointments" className="text-sm md:text-base">
               Appointments
+            </TabsTrigger>
+            <TabsTrigger value="payments" className="text-sm md:text-base">
+              Payments
             </TabsTrigger>
           </TabsList>
 
@@ -662,12 +738,8 @@ const AdminDashboard = () => {
                         <table className="w-full">
                           <thead>
                             <tr className="border-b bg-muted/50">
-                              <th className="text-left py-3 px-4 font-medium">
-                                Doctor Name
-                              </th>
-                              <th className="text-right py-3 px-4 font-medium">
-                                Appointments
-                              </th>
+                              <th className="text-left py-3 px-4 font-medium">Doctor Name</th>
+                              <th className="text-right py-3 px-4 font-medium">Appointments</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -677,7 +749,7 @@ const AdminDashboard = () => {
                                   key={index}
                                   className="border-b hover:bg-muted/30 transition-colors"
                                 >
-                                  <td className="py-3 px-4">{doctor.name}</td>
+                                  <td className="py-3 px-4">{`Dr. ${doctor.name}`}</td>
                                   <td className="text-right py-3 px-4">
                                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
                                       {doctor.count}
@@ -691,9 +763,7 @@ const AdminDashboard = () => {
                       </div>
                     ) : (
                       <div className="flex items-center justify-center h-full">
-                        <p className="text-muted-foreground">
-                          No data available
-                        </p>
+                        <p className="text-muted-foreground">No data available</p>
                       </div>
                     )}
                   </div>
@@ -707,14 +777,30 @@ const AdminDashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card className="shadow-md">
                 <CardHeader>
-                  <CardTitle>Predictions by Status</CardTitle>
+                  <CardTitle>Skin Lesion Prediction Type</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="h-[300px] flex items-center justify-center">
-                    {predictionData?.summary.predictionsByStatus ? (
+                    {predictionData?.charts?.lesionDistribution ? (
                       <Doughnut
                         options={doughnutOptions}
-                        data={predictionStatusData}
+                        data={{
+                          labels: predictionData.charts.lesionDistribution.map((item) => item.name),
+                          datasets: [
+                            {
+                              data: predictionData.charts.lesionDistribution.map((item) => item.count),
+                              backgroundColor: [
+                                "#f87171", 
+                                "#60a5fa", 
+                                "#fbbf24", 
+                                "#34d399",
+                                "#a78bfa",
+                                "#f472b6",
+                                "#38bdf8", 
+                                "#facc15",                               ],
+                            },
+                          ],
+                        }}
                       />
                     ) : (
                       <p className="text-muted-foreground">No data available</p>
@@ -743,53 +829,52 @@ const AdminDashboard = () => {
 
               <Card className="md:col-span-2 shadow-md">
                 <CardHeader>
-                  <CardTitle>Recent Predictions</CardTitle>
+                  <CardTitle>Recent Lesion Type Distribution</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-auto max-h-[400px]">
-                    {predictionData?.summary.predictionsByStatus?.length ? (
+                    {predictionData?.summary?.lesionDistribution?.length ? (
                       <table className="w-full">
                         <thead>
                           <tr className="border-b">
-                            <th className="text-left py-3 px-4 font-semibold">
-                              Status
-                            </th>
-                            <th className="text-right py-3 px-4 font-semibold">
-                              Count
-                            </th>
+                            <th className="text-left py-3 px-4 font-semibold">Class</th>
+                            <th className="text-left py-3 px-4 font-semibold">Name</th>
+                            <th className="text-left py-3 px-4 font-semibold">Cancer Status</th>
+                            <th className="text-right py-3 px-4 font-semibold">Count</th>
+                            <th className="text-right py-3 px-4 font-semibold">Percent</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {predictionData.summary.predictionsByStatus.map(
-                            (item, index) => (
-                              <tr
-                                key={index}
-                                className="border-b hover:bg-muted/50 transition-colors"
-                              >
-                                <td className="py-3 px-4">
-                                  <span
-                                    className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-medium
-                                  ${
-                                    item.status === "COMPLETED"
-                                      ? "bg-green-100 text-green-800"
-                                      : item.status === "FAILED"
-                                      ? "bg-red-100 text-red-800"
-                                      : item.status === "PROCESSING"
-                                      ? "bg-blue-100 text-blue-800"
-                                      : "bg-gray-100 text-gray-800"
-                                  }`}
-                                  >
-                                    {item.status}
-                                  </span>
-                                </td>
-                                <td className="text-right py-3 px-4">
-                                  <span className="inline-flex items-center justify-center bg-primary/10 text-primary rounded-full px-2.5 py-0.5 text-sm font-medium">
-                                    {item.count}
-                                  </span>
-                                </td>
-                              </tr>
-                            )
-                          )}
+                          {predictionData.summary.lesionDistribution.map((item, index) => (
+                            <tr
+                              key={index}
+                              className="border-b hover:bg-muted/50 transition-colors"
+                            >
+                              <td className="py-3 px-4 font-mono">{item.class}</td>
+                              <td className="py-3 px-4">{item.name}</td>
+                              <td className="py-3 px-4">
+                                {item.isCancerous === true && (
+                                  <span className="text-red-600 font-semibold ml-2">Cancerous</span>
+                                )}
+                                {item.isCancerous === false && (
+                                  <span className="text-green-600 font-semibold ml-2">Non-cancerous</span>
+                                )}
+                                {item.isCancerous === null && (
+                                  <span className="text-gray-500 font-semibold ml-2">Unknown</span>
+                                )}
+                              </td>
+                              <td className="text-right py-3 px-4">
+                                <span className="inline-flex items-center justify-center bg-primary/10 text-primary rounded-full px-2.5 py-0.5 text-sm font-medium">
+                                  {item.count}
+                                </span>
+                              </td>
+                              <td className="text-right py-3 px-4">
+                                <span className="inline-flex items-center justify-center bg-primary/10 text-primary rounded-full px-2.5 py-0.5 text-sm font-medium">
+                                  {item.percent}%
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
                         </tbody>
                       </table>
                     ) : (
@@ -847,42 +932,69 @@ const AdminDashboard = () => {
                   <CardTitle>Appointments by Day</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-auto max-h-[400px]">
-                    {appointmentData?.charts?.appointmentsByDay?.length ? (
-                      <table className="w-full">
-                        <thead>
-                          <tr className="border-b">
-                            <th className="text-left py-3 px-4 font-semibold">
-                              Day
-                            </th>
-                            <th className="text-right py-3 px-4 font-semibold">
-                              Count
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {appointmentData.charts.appointmentsByDay.map(
-                            (item, index) => (
-                              <tr
-                                key={index}
-                                className="border-b hover:bg-muted/50 transition-colors"
-                              >
-                                <td className="py-3 px-4">{item.day}</td>
-                                <td className="text-right py-3 px-4">
-                                  <span className="inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-100 text-green-800">
-                                    {item.count}
-                                  </span>
-                                </td>
-                              </tr>
-                            )
-                          )}
-                        </tbody>
-                      </table>
+                  <div className="h-[300px] flex items-center justify-center">
+                    {appointmentsByDayData ? (
+                      <Bar options={barChartOptions} data={appointmentsByDayData} />
                     ) : (
                       <p className="text-muted-foreground text-center py-8">
                         No data available
                       </p>
                     )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* Payments Tab */}
+          <TabsContent value="payments">
+            <div className="grid grid-cols-1 gap-6">
+              <Card className="mb-8 shadow-md">
+                <CardHeader>
+                  <CardTitle>Payment Statistics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <div className="mb-4">
+                        <div className="flex flex-wrap gap-4">
+                          <div className="flex flex-col items-center">
+                            <span className="text-lg font-semibold">Total Payments</span>
+                            <span className="text-2xl font-bold">{paymentData?.summary.totalPayments ?? 0}</span>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <span className="text-lg font-semibold">Completed</span>
+                            <span className="text-2xl font-bold text-green-600">{paymentData?.summary.completedPayments ?? 0}</span>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <span className="text-lg font-semibold">Pending</span>
+                            <span className="text-2xl font-bold text-yellow-600">{paymentData?.summary.pendingPayments ?? 0}</span>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <span className="text-lg font-semibold">Total Completed Amount</span>
+                            <span className="text-2xl font-bold text-primary">${paymentData?.summary.totalAmountCompleted?.toFixed(2) ?? '0.00'}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="h-[250px]">
+                        {paymentsByDayData ? (
+                          <Bar options={barChartOptions} data={paymentsByDayData} />
+                        ) : (
+                          <div className="flex items-center justify-center h-full">
+                            <p className="text-muted-foreground">No data available</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="h-[300px]">
+                      {monthlyPaymentsData ? (
+                        <Bar options={barChartOptions} data={monthlyPaymentsData} />
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <p className="text-muted-foreground">No data available</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </CardContent>
               </Card>

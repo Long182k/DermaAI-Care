@@ -1,15 +1,5 @@
 import { Button } from "@/components/ui/button";
 import {
-  UserCircle,
-  Globe,
-  Calendar,
-  Bell,
-  Stethoscope,
-  FileImage,
-} from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
-import { Badge } from "@/components/ui/badge";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -17,16 +7,23 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/store";
 import { useMutation } from "@tanstack/react-query";
+import {
+  Calendar,
+  Stethoscope,
+  UserCircle
+} from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { AxiosError } from "axios";
 import { ErrorResponseData } from "@/@util/interface/auth.interface";
 import { useToast } from "@/hooks/use-toast";
+import { AxiosError } from "axios";
 
 export const Navbar = () => {
   const { userInfo, logout } = useAppStore();
   const { toast } = useToast();
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleLogout = async () => {
     try {
@@ -69,6 +66,14 @@ export const Navbar = () => {
     },
   });
 
+  // Helper to check if a route is active
+  const isActive = (path: string) => {
+    if (path === "/") {
+      return location.pathname === "/";
+    }
+    return location.pathname.startsWith(path);
+  };
+
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b">
       <div className="container flex items-center justify-between h-16">
@@ -77,23 +82,39 @@ export const Navbar = () => {
         </Link>
 
         <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate("/")}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate("/")}
+            className={isActive("/") ? "bg-primary/10 text-primary font-bold" : ""}
+          >
             Home
           </Button>
-          <Button variant="ghost" onClick={() => navigate("/about")}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate("/about")}
+            className={isActive("/about") ? "bg-primary/10 text-primary font-bold" : ""}
+          >
             About
           </Button>
-          <Button variant="ghost" onClick={() => navigate("/services")}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate("/services")}
+            className={isActive("/services") ? "bg-primary/10 text-primary font-bold" : ""}
+          >
             Services
           </Button>
-          <Button variant="ghost" onClick={() => navigate("/contact")}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate("/contact")}
+            className={isActive("/contact") ? "bg-primary/10 text-primary font-bold" : ""}
+          >
             Contact
           </Button>
           {/* Appointments Button */}
-          {/* <Button variant="ghost" onClick={() => navigate("/appointments")}>
+          <Button variant="ghost" onClick={() => navigate("/appointments")}>
             <Calendar className="h-5 w-5 mr-2" />
             Appointments
-          </Button> */}
+          </Button>
 
           {/* Prediction History Button */}
           {/* <Button

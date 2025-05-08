@@ -9,11 +9,9 @@ const UserProfile = () => {
   const { userInfo } = useAppStore();
   const navigate = useNavigate();
 
-  // Helper to format date of birth
   const formatDateOfBirth = (dob?: string) => {
     if (!dob) return "N/A";
     try {
-      // Handles both ISO string and plain date
       const date = typeof dob === "string" ? parseISO(dob) : dob;
       return format(date, "MMMM d, yyyy");
     } catch {

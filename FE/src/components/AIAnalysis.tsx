@@ -1,21 +1,43 @@
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { analyzeImage, DetectionResponse } from "@/api/detection";
 import {
-  ArrowLeft,
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+import { useMutation } from "@tanstack/react-query";
+import {
+  AlertTriangle,
   Brain,
+  Calendar,
+  CheckCircle,
   Image,
+  Info,
   Loader2,
   ScanLine,
-  Upload,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { BackButton } from "./common/BackButton";
-import { useMutation } from "@tanstack/react-query";
-import { analyzeImage, DetectionResponse } from "@/api/detection";
-import { Badge } from "@/components/ui/badge";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { BackButton } from "./common/BackButton";
+
+interface Detection {
+  bbox: number[];
+  detection_confidence: number;
+  class: string;
+  class_confidence: number;
+  explanation?: {
+    name: string;
+    description: string;
+    isCancerous: boolean | null;
+    severity: string;
+    recommendation: string;
+  };
+}
 
 export const AIAnalysis = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -53,7 +75,48 @@ export const AIAnalysis = () => {
       mutate(selectedFile);
     }
   };
-  const navigate = useNavigate(); // <-- Add this line
+
+  const navigate = useNavigate();
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity.toLowerCase()) {
+      case "high":
+        return "bg-red-100 text-red-800";
+      case "moderate":
+      case "moderate to high":
+        return "bg-orange-100 text-orange-800";
+      case "low":
+      case "low to moderate":
+        return "bg-green-100 text-green-800";
+      default:
+        return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  const getCancerousStatus = (isCancerous: boolean | null) => {
+    if (isCancerous === true) {
+      return (
+        <div className="flex items-center text-red-600">
+          <AlertTriangle className="h-4 w-4 mr-1" />
+          <span className="font-medium">Cancerous</span>
+        </div>
+      );
+    } else if (isCancerous === false) {
+      return (
+        <div className="flex items-center text-green-600">
+          <CheckCircle className="h-4 w-4 mr-1" />
+          <span className="font-medium">Non-cancerous</span>
+        </div>
+      );
+    } else {
+      return (
+        <div className="flex items-center text-gray-600">
+          <Info className="h-4 w-4 mr-1" />
+          <span className="font-medium">Unknown</span>
+        </div>
+      );
+    }
+  };
 
   return (
     <div className="w-full max-w-4xl mx-auto p-6">
@@ -151,33 +214,101 @@ export const AIAnalysis = () => {
                     <div className="space-y-2">
                       <h3 className="font-medium">Detected Lesions:</h3>
                       {analysisResult.detections.length > 0 ? (
-                        <ul className="space-y-2">
-                          {analysisResult.detections.map((detection, index) => (
-                            <li
-                              key={index}
-                              className="p-2 bg-background rounded-md"
-                            >
-                              <div className="flex justify-between items-center">
-                                <Badge
-                                  variant="outline"
-                                  className="font-semibold"
-                                >
-                                  {detection.class}
-                                </Badge>
-                                <span className="text-sm">
-                                  Confidence:{" "}
-                                  {/* {(detection.class_confidence * 100).toFixed(
-                                    1
-                                  )} */}
-                                  {(
-                                    detection.detection_confidence * 100
-                                  ).toFixed(1)}
-                                  %
-                                </span>
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
+                        <Accordion type="single" collapsible className="w-full">
+                          {analysisResult.detections.map(
+                            (detection: Detection, index) => (
+                              <AccordionItem
+                                key={index}
+                                value={`item-${index}`}
+                              >
+                                <AccordionTrigger className="py-2 px-4 bg-background rounded-md hover:bg-muted">
+                                  <div className="flex justify-between items-center w-full">
+                                    <div className="flex items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className="font-semibold"
+                                      >
+                                        {detection.explanation?.name ||
+                                          detection.class}
+                                      </Badge>
+                                      {detection.explanation &&
+                                        getCancerousStatus(
+                                          detection.explanation.isCancerous
+                                        )}
+                                    </div>
+                                    <span className="text-sm">
+                                      Confidence:{" "}
+                                      {(
+                                        detection.detection_confidence * 100
+                                      ).toFixed(1)}
+                                      %
+                                    </span>
+                                  </div>
+                                </AccordionTrigger>
+                                <AccordionContent>
+                                  {detection.explanation ? (
+                                    <div className="p-4 bg-white rounded-md mt-2 space-y-3">
+                                      <div>
+                                        <h4 className="font-medium text-sm text-muted-foreground">
+                                          What is it?
+                                        </h4>
+                                        <p>
+                                          {detection.explanation.description}
+                                        </p>
+                                      </div>
+
+                                      <div className="flex flex-wrap gap-2">
+                                        <div className="flex-1 min-w-[120px]">
+                                          <h4 className="font-medium text-sm text-muted-foreground">
+                                            Status
+                                          </h4>
+                                          {getCancerousStatus(
+                                            detection.explanation.isCancerous
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div>
+                                        <h4 className="font-medium text-sm text-muted-foreground">
+                                          Recommendation
+                                        </h4>
+                                        <p>
+                                          {detection.explanation.recommendation}
+                                        </p>
+                                      </div>
+
+                                      <div className="pt-2">
+                                        <Button
+                                          onClick={() => navigate("/booking")}
+                                          className="w-full"
+                                        >
+                                          <Calendar className="mr-2 h-4 w-4" />
+                                          Book Appointment
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="p-4 bg-white rounded-md mt-2">
+                                      <p className="text-muted-foreground">
+                                        No detailed information available for
+                                        this condition.
+                                      </p>
+                                      <div className="pt-4">
+                                        <Button
+                                          onClick={() => navigate("/booking")}
+                                          className="w-full"
+                                        >
+                                          <Calendar className="mr-2 h-4 w-4" />
+                                          Book Appointment
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </AccordionContent>
+                              </AccordionItem>
+                            )
+                          )}
+                        </Accordion>
                       ) : (
                         <p className="text-muted-foreground">
                           No lesions detected

@@ -9,8 +9,6 @@ export default function SharedMedia() {
     if (!channel) return;
 
     const subscription = channel.on("message.new", (event) => {
-      console.log({ event });
-
       event.message.attachments?.forEach((attachment) => {
         if (attachment.type === "image" && attachment.image_url) {
           setSharedMedia((prev) => [...prev, attachment.image_url]);

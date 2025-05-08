@@ -8,86 +8,37 @@ datasource db {
 }
 
 model User {
-  id                  String                 @id @default(uuid())
-  
-  userName            String                 @unique
+  id String @id @default(uuid())
+
+  userName            String           @unique
   firstName           String?
   lastName            String?
-  email               String                 @unique
-  role                Role                   @default(PATIENT)
+  email               String           @unique
+  role                Role             @default(PATIENT)
   password            String
   dateOfBirth         DateTime?
   experience          Int?
   education           String?
   certifications      String?
   phoneNumber         String?
-  gender              Gender?                @default(MALE)
-  languages           Languages?             @default(English)
+  gender              Gender?          @default(MALE)
+  languages           Languages?       @default(English)
   hashedPassword      String
   avatarUrl           String?
   hashedRefreshToken  String?
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
-  isActive            Boolean                @default(true)
-  lastLoginAt         DateTime               @default(now())
-  PatientAppointments Appointment[]          @relation("PatientAppointments")
-  DoctorAppointments  Appointment[]          @relation("DoctorAppointments")
-  MedicalRecords      MedicalRecordHistory[]
-  DoctorReviews       Review[]               @relation("DoctorReviews")
-  PatientReviews      Review[]               @relation("PatientReviews")
+  createdAt           DateTime         @default(now())
+  isActive            Boolean          @default(true)
+  lastLoginAt         DateTime         @default(now())
+  PatientAppointments Appointment[]    @relation("PatientAppointments")
+  DoctorAppointments  Appointment[]    @relation("DoctorAppointments")
   Payments            Payment[]
   Notifications       Notification[]
   AIDiagnosisJobs     AIDiagnosisJob[]
-  MessageParticipants MessageParticipant[]
-  Message             Message[]
-  Schedule            Schedule[]             @relation("DoctorSchedules")
+  Schedule            Schedule[]       @relation("DoctorSchedules")
 
   @@index([email])
   @@index([userName])
   @@index([role])
-}
-
-model MessageRoom {
-  id        String   @id @default(uuid())
-  name      String
-  roomType  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  Messages            Message[]
-  MessageParticipants MessageParticipant[]
-
-  @@index([roomType])
-}
-
-model Message {
-  id        String   @id @default(uuid())
-  roomId    String
-  senderId  String
-  content   String
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  Room   MessageRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  Sender User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
-
-  @@index([roomId])
-  @@index([senderId])
-  @@index([createdAt])
-  @@index([isRead])
-}
-
-model MessageParticipant {
-  id       String   @id @default(uuid())
-  roomId   String
-  userId   String
-  joinedAt DateTime @default(now())
-
-  Room MessageRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  User User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([roomId])
-  @@index([userId])
 }
 
 model Schedule {
@@ -97,7 +48,6 @@ model Schedule {
   endTime   DateTime
   status    ScheduleStatus @default(AVAILABLE)
   createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
 
   Doctor      User         @relation("DoctorSchedules", fields: [doctorId], references: [id], onDelete: Cascade)
   Appointment Appointment?
@@ -115,14 +65,13 @@ model Appointment {
   status     String
   notes      String?
   createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
   scheduleId String   @unique
 
-  Patient   User       @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
-  Doctor    User       @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
-  Reminders Reminder[]
-  Schedule  Schedule   @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  Payments  Payment[]  
+  Patient      User           @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
+  Doctor       User           @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
+  Schedule     Schedule       @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  Payments     Payment[]
+  Notification Notification[]
 
   @@index([patientId])
   @@index([doctorId])
@@ -130,54 +79,10 @@ model Appointment {
   @@index([createdAt])
 }
 
-model Reminder {
-  id            String   @id @default(uuid())
-  appointmentId String
-  method        String
-  createdAt     DateTime @default(now())
-
-  Appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
-
-  @@index([appointmentId])
-  @@index([method])
-}
-
-model MedicalRecordHistory {
-  id        String   @id @default(uuid())
-  userId    String
-  diagnosis String
-  aiReport  Json
-  images    Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([createdAt])
-}
-
-model Review {
-  id        String   @id @default(uuid())
-  doctorId  String
-  patientId String
-  rating    Int
-  message   String
-  createdAt DateTime @default(now())
-
-  Doctor  User @relation("DoctorReviews", fields: [doctorId], references: [id], onDelete: Cascade)
-  Patient User @relation("PatientReviews", fields: [patientId], references: [id], onDelete: Cascade)
-
-  @@index([doctorId])
-  @@index([patientId])
-  @@index([rating])
-  @@index([createdAt])
-}
-
 model Payment {
   id            String   @id @default(uuid())
   userId        String
-  appointmentId String   
+  appointmentId String
   amount        Float
   currency      String
   status        String
@@ -185,8 +90,9 @@ model Payment {
   transactionId String   @unique
   createdAt     DateTime @default(now())
 
-  User        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  Appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  User         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  Appointment  Appointment    @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  Notification Notification[]
 
   @@index([userId])
   @@index([status])
@@ -195,45 +101,37 @@ model Payment {
 }
 
 model Notification {
-  id        String   @id @default(uuid())
-  userId    String
-  title     String
-  message   String
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id            String   @id @default(uuid())
+  userId        String
+  method        String
+  createdAt     DateTime @default(now())
+  appointmentId String?
+  paymentId     String?
 
-  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  User        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  Appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  Payment     Payment?     @relation(fields: [paymentId], references: [id], onDelete: SetNull)
 
   @@index([userId])
-  @@index([isRead])
+  @@index([method])
   @@index([createdAt])
+  @@index([appointmentId])
+  @@index([paymentId])
 }
 
 model AIDiagnosisJob {
-  id        String   @id @default(uuid())
-  userId    String
-  imageUrl  String
-  status    String
-  result    Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String   @id @default(uuid())
+  userId            String
+  imageUrl          String
+  status            String
+  imageWithBoxesUrl String?
+  result            Json
+  createdAt         DateTime @default(now())
 
   User User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])
-  @@index([createdAt])
-}
-
-model MedicalGuidance {
-  id          String   @id @default(uuid())
-  title       String
-  description String
-  category    String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@index([category])
   @@index([createdAt])
 }
 

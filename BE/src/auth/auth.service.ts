@@ -80,10 +80,14 @@ export class AuthService {
       refreshToken,
       userId: user.id,
       userName: user.userName,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      dateOfBirth: user.dateOfBirth,
+      phoneNumber: user.phoneNumber,
+      gender: user.gender,
       email: user.email,
       role: user.role,
       avatarUrl: user.avatarUrl,
-      coverPageUrl: user.coverPageUrl,
       streamToken,
     };
   }

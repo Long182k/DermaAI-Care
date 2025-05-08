@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import homepageSkin from "@/assets/images/homepage-skin.jpg";
+import homepageSkin from "@/assets/images/homepage.jpg";
 
 export const Hero = () => {
   const navigate = useNavigate();

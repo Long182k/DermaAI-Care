@@ -12,12 +12,10 @@ import { User } from '@prisma/client';
 import { CurrentUser } from '../auth/@decorator/current-user.decorator';
 import { JwtAuthGuard } from '../auth/@guard/jwt-auth.guard';
 import { RolesGuard } from '../auth/@guard/roles.guard';
-import { Roles } from '../auth/@decorator/roles.decorator';
-import { UpdateScheduleDto } from './dto/update-schedule.dto';
-import { ScheduleService } from './schedule.service';
-import { ScheduleTasksService } from './schedule-tasks.service';
-import { ROLE } from 'src/auth/util/@enum/role.enum';
 import { ParseISODatePipe } from '../common/pipes/parse-iso-date.pipe';
+import { UpdateScheduleDto } from './dto/update-schedule.dto';
+import { ScheduleTasksService } from './schedule-tasks.service';
+import { ScheduleService } from './schedule.service';
 
 @Controller('schedules')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -32,11 +30,13 @@ export class ScheduleController {
     @Param('doctorId') doctorId: string,
     @Query('startDate', ParseISODatePipe) startDate: Date,
     @Query('endDate', ParseISODatePipe) endDate: Date,
+    @Query('filter') filter?: 'day' | 'week' | 'month',
   ) {
     return await this.scheduleService.findDoctorSchedules(
       doctorId,
       startDate,
       endDate,
+      filter,
     );
   }
 

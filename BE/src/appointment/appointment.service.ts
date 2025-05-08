@@ -25,7 +25,7 @@ export class AppointmentService {
     // Start transaction to ensure data consistency
     return await this.prisma.$transaction(async (tx) => {
       const currentUserRole = await tx.user.findUnique({
-        where: { id: userId },
+        where: { id: userId ?? patientId },
       });
 
       // Check if schedule is available
@@ -48,13 +48,13 @@ export class AppointmentService {
         data: { status: ScheduleStatus.BOOKED },
       });
 
-      const mappedPatientId =
-        currentUserRole.role === 'PATIENT' ? userId : patientId;
+      // const mappedPatientId =
+      //   currentUserRole.role === 'PATIENT' ? userId : patientId;
 
       // Create appointment
       const appointment = await tx.appointment.create({
         data: {
-          patientId: mappedPatientId,
+          patientId,
           doctorId: schedule.doctorId,
           scheduleId,
           status: 'SCHEDULED',
@@ -66,9 +66,19 @@ export class AppointmentService {
           Schedule: true,
         },
       });
-      // Create reminder
-      await tx.reminder.create({
+      // Create notification to users' email.
+      await tx.notification.create({
         data: {
+          userId: patientId,
+          appointmentId: appointment.id,
+          method: 'EMAIL',
+        },
+      });
+
+      // You might also want to create a notification for the doctor
+      await tx.notification.create({
+        data: {
+          userId: schedule.doctorId, // Notification for the doctor
           appointmentId: appointment.id,
           method: 'EMAIL',
         },
@@ -97,20 +107,79 @@ export class AppointmentService {
   }
 
   async findUserAppointments(userId: string, role: string) {
-    const where =
-      role === 'DOCTOR' ? { doctorId: userId } : { patientId: userId };
+    if (role === 'PATIENT') {
+      return await this.prisma.appointment.findMany({
+        where: { patientId: userId },
+        include: {
+          Patient: true,
+          Doctor: true,
+          Schedule: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+    }
 
-    return await this.prisma.appointment.findMany({
-      where,
-      include: {
-        Patient: true,
-        Doctor: true,
-        Schedule: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    if (role === 'DOCTOR') {
+      return await this.prisma.appointment.findMany({
+        where: { doctorId: userId },
+        include: {
+          Patient: true,
+          Doctor: true,
+          Schedule: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+    }
+  }
+
+  async findAppointmentHistory(userId: string, role: string) {
+    // Define where clause based on user role
+    const where =
+      role === 'DOCTOR'
+        ? {
+            doctorId: userId,
+            status: { in: ['COMPLETED', 'CANCELLED'] },
+          }
+        : {
+            patientId: userId,
+            status: { in: ['COMPLETED', 'CANCELLED'] },
+          };
+
+    if (role === 'PATIENT') {
+      return await this.prisma.appointment.findMany({
+        where,
+        include: {
+          Patient: true,
+          Doctor: true,
+          Schedule: true,
+        },
+        orderBy: {
+          Schedule: {
+            startTime: 'desc',
+          },
+        },
+      });
+    }
+
+    if (role === 'DOCTOR') {
+      return await this.prisma.appointment.findMany({
+        where,
+        include: {
+          Patient: true,
+          Doctor: true,
+          Schedule: true,
+        },
+        orderBy: {
+          Schedule: {
+            startTime: 'desc',
+          },
+        },
+      });
+    }
   }
 
   async updateAppointment(
@@ -127,11 +196,13 @@ export class AppointmentService {
       throw new ForbiddenException('Appointment not found');
     }
 
+    const userId = currentUser.id ?? currentUser.userId;
+
     // Check permissions
     if (
       currentUser.role !== 'ADMIN' &&
-      appointment.patientId !== currentUser.id &&
-      appointment.doctorId !== currentUser.id
+      appointment.patientId !== userId &&
+      appointment.doctorId !== userId
     ) {
       throw new ForbiddenException(
         'You do not have permission to update this appointment',
@@ -158,13 +229,10 @@ export class AppointmentService {
     if (!appointment) {
       throw new ForbiddenException('Appointment not found');
     }
+    const userId = currentUser.id ?? currentUser.userId;
 
     // Check permissions
-    if (
-      currentUser.role !== 'ADMIN' &&
-      appointment.patientId !== currentUser.id &&
-      appointment.doctorId !== currentUser.id
-    ) {
+    if (appointment.patientId !== userId && appointment.doctorId !== userId) {
       throw new ForbiddenException(
         'You do not have permission to cancel this appointment',
       );
@@ -182,5 +250,22 @@ export class AppointmentService {
         data: { status: ScheduleStatus.AVAILABLE },
       }),
     ]);
+  }
+
+  async findAppointmentById(id: string) {
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id },
+      include: {
+        Patient: true,
+        Doctor: true,
+        Schedule: true,
+      },
+    });
+
+    if (!appointment) {
+      throw new ForbiddenException('Appointment not found');
+    }
+
+    return appointment;
   }
 }

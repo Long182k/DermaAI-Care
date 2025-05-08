@@ -35,9 +35,22 @@ export class AppointmentController {
   @Get('user')
   async getUserAppointments(@CurrentUser() currentUser: User) {
     return await this.appointmentService.findUserAppointments(
-      currentUser.id,
+      currentUser.id ?? currentUser.userId,
       currentUser.role,
     );
+  }
+
+  @Get('history')
+  async getAppointmentHistory(@CurrentUser() currentUser: User) {
+    return await this.appointmentService.findAppointmentHistory(
+      currentUser.id ?? currentUser.userId,
+      currentUser.role,
+    );
+  }
+
+  @Get(':id')
+  async getAppointmentById(@Param('id') id: string) {
+    return await this.appointmentService.findAppointmentById(id);
   }
 
   @Patch(':id')
@@ -53,7 +66,7 @@ export class AppointmentController {
     );
   }
 
-  @Delete(':id')
+  @Patch(':id/cancel')
   async cancelAppointment(
     @Param('id') id: string,
     @CurrentUser() currentUser: User,

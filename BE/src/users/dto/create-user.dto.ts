@@ -1,4 +1,4 @@
-import { Languages, Role } from '@prisma/client';
+import { Languages, Role, Gender } from '@prisma/client';
 import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class CreateUserDTO {
@@ -8,16 +8,29 @@ export class CreateUserDTO {
 
   @IsString()
   @IsNotEmpty()
-  role: Role;
+  firstName: string;
 
   @IsString()
   @IsNotEmpty()
-  password: string;
+  lastName: string;
 
   @IsEmail()
   @IsNotEmpty()
   email: string;
 
+  @IsString()
+  @IsNotEmpty()
+  role: Role;
+
+  @IsString()
+  @IsOptional()
+  phoneNumber?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  password: string;
+
+  @IsString()
   @IsOptional()
   avatarUrl?: string;
 
@@ -27,12 +40,17 @@ export class CreateUserDTO {
   @IsOptional()
   experience?: number;
 
+  @IsString()
   @IsOptional()
   education?: string;
 
+  @IsString()
   @IsOptional()
   certifications?: string;
 
   @IsOptional()
   languages?: Languages;
+
+  @IsOptional()
+  gender?: Gender;
 }

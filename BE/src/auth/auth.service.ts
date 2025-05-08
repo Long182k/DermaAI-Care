@@ -3,6 +3,7 @@ import {
   Injectable,
   UnauthorizedException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
@@ -15,6 +16,12 @@ import { UserRepository } from 'src/users/users.repository';
 import { PrismaService } from 'src/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MailerService } from '@nestjs-modules/mailer';
+import { StreamChat } from 'stream-chat';
+
+const streamChat = StreamChat.getInstance(
+  process.env.STREAM_KEY!,
+  process.env.STREAM_SECRET!,
+);
 
 @Injectable()
 export class AuthService {
@@ -58,15 +65,30 @@ export class AuthService {
 
     await this.usersService.updateHashedRefreshToken(payloadUpdate);
 
+    const {
+      users: [firstUser],
+    } = await streamChat.queryUsers({ id: user.id });
+
+    if (!firstUser) {
+      throw new UnauthorizedException('User not found in stream chat');
+    }
+
+    const streamToken = streamChat.createToken(user.id);
+
     return {
       accessToken,
       refreshToken,
       userId: user.id,
       userName: user.userName,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      dateOfBirth: user.dateOfBirth,
+      phoneNumber: user.phoneNumber,
+      gender: user.gender,
       email: user.email,
       role: user.role,
       avatarUrl: user.avatarUrl,
-      coverPageUrl: user.coverPageUrl,
+      streamToken,
     };
   }
 
@@ -74,7 +96,36 @@ export class AuthService {
     const { accessToken, refreshToken } =
       await this.generateTokens(createUserDto);
 
+    // Check for existing user
+    const existingUser = await this.usersService.findUserByKeyword({
+      email: createUserDto.email,
+    });
+
+    if (existingUser) {
+      throw new BadRequestException('User already exist');
+    }
+
     const result = await this.userRepository.createUser(createUserDto);
+
+    const hashedRefreshToke = await argon.hash(refreshToken);
+    const payloadUpdate: UpdateHashedRefreshTokenDTO = {
+      userId: result.id,
+      hashedRefreshToken: hashedRefreshToke,
+    };
+
+    await this.usersService.updateHashedRefreshToken(payloadUpdate);
+
+    // check for existing user
+    const existingUsers = await streamChat.queryUsers({ id: result.id });
+    if (existingUsers.users.length > 0) {
+      throw new BadRequestException('User already exist in stream chat');
+    }
+
+    await streamChat.upsertUser({
+      id: result.id,
+      name: result.userName,
+      image: result.avatarUrl,
+    });
 
     return {
       ...result,

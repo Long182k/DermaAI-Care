@@ -24,22 +24,16 @@ export class UsersController {
     private cloudinaryService: CloudinaryService,
   ) {}
 
-  @Get()
-  findAll(@CurrentUser('userId') userId: string) {
-    return this.usersService.findAll(userId);
+  @Get('/doctor/:doctorId')
+  findAll(@Param('doctorId') doctorId: string) {
+    return this.usersService.findDoctorByID(doctorId);
   }
 
-  @Get('/email_param/:email')
-  findOne(@Param('email') email: string) {
-    return this.usersService.findOne(email);
+  @Get('/doctors')
+  findAllDoctors(@CurrentUser() currentUser: any) {
+    return this.usersService.findAllDoctors();
   }
 
-  @Get('/email_query')
-  findOne2(@Query('email') email: string) {
-    return this.usersService.findOne(email);
-  }
-
-  @Roles(ROLE.ADMIN)
   @Get('/keyword')
   async findUserByKeyword(@Body() keyword: GetUserByKeywordDTO) {
     return await this.usersService.findUserByKeyword(keyword);

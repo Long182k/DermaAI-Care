@@ -10,7 +10,14 @@ export interface RegisterFormProp {
 }
 
 export interface ErrorResponseData {
-  message: string;
+  // '{"message":"User already exist","error":"Bad Request","statusCode":400}',
+
+  response: {
+    data: {
+      message: string;
+      statusCode: number;
+    };
+  };
 }
 
 export type LoginResponse = {
@@ -50,4 +57,5 @@ export interface AuthStore {
   signup: (data: RegisterNewUserParams) => Promise<RegisterResponse>;
   login: (data: LoginParams) => Promise<LoginResponse>;
   logout: () => Promise<void>;
+  streamToken?: string | undefined | null;
 }

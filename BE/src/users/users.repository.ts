@@ -27,22 +27,45 @@ export class UserRepository {
         },
       });
 
-      if (!user) {
-        throw new NotFoundException('User not found.');
-      }
-
       return user;
     }
   }
 
-  async findAllUsers(userId: string): Promise<User[]> {
-    return this.prisma.user.findMany({
+  async findDoctorByID(userId: string): Promise<User> {
+    return this.prisma.user.findUnique({
       where: {
-        NOT: {
-          id: userId,
-        },
+        id: userId,
       },
     });
+  }
+
+  async findAllDoctors(
+    page: number = 1,
+    limit: number = 100,
+  ): Promise<{ doctors: User[]; total: number; page: number; limit: number }> {
+    const skip = (page - 1) * limit;
+
+    const [doctors, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          role: 'DOCTOR',
+        },
+        skip,
+        take: limit,
+      }),
+      this.prisma.user.count({
+        where: {
+          role: 'DOCTOR',
+        },
+      }),
+    ]);
+
+    return {
+      doctors,
+      total,
+      page,
+      limit,
+    };
   }
 
   async createUser(data: CreateUserDTO): Promise<User> {
@@ -60,6 +83,9 @@ export class UserRepository {
       certifications,
       languages,
       role,
+      phoneNumber,
+      firstName,
+      lastName,
     } = data;
 
     const hashedPassword = await argon.hash(password);
@@ -77,6 +103,9 @@ export class UserRepository {
         certifications,
         languages,
         role,
+        phoneNumber,
+        firstName,
+        lastName,
       },
     });
 

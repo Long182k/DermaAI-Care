@@ -1,7 +1,13 @@
 export type RegisterNewUserParams = {
+  userName: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
-  username: string;
+  phoneNumber?: string;
   password: string;
+  gender: string;
+  dateOfBirth: Date;
+  role: string;
 };
 
 export type LoginParams = {
@@ -14,6 +20,8 @@ type ROLE = "USER" | "ADMIN";
 
 export type User = {
   id: string;
+  phoneNumber: string;
+  gender: string;
   userId: string;
   userName: string;
   email: string;
@@ -29,4 +37,5 @@ export type User = {
   dateOfBirth: string | null;
   accessToken?: string;
   refreshToken?: string;
+  streamToken?: string | undefined | null;
 };

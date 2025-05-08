@@ -27,8 +27,12 @@ export class UsersService {
     );
   }
 
-  async findAll(userId: string) {
-    return await this.userRepository.findAllUsers(userId);
+  async findDoctorByID(userId: string) {
+    return await this.userRepository.findDoctorByID(userId);
+  }
+
+  async findAllDoctors() {
+    return await this.userRepository.findAllDoctors();
   }
 
   async findOne(email: string) {

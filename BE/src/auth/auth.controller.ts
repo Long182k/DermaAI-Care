@@ -52,12 +52,6 @@ export class AuthController {
     return this.authService.refreshToken(req.user);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Post('signout')
-  async signOut(@Request() req) {
-    return await this.authService.signOut(req.user.userId);
-  }
-
   @Get('profile')
   getProfile(@Request() req) {
     return req.user;

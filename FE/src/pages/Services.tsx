@@ -1,4 +1,3 @@
-
 import { Navbar } from "@/components/Navbar";
 import { Bot, Calendar, MessageSquare } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -8,21 +7,24 @@ const services = [
   {
     icon: Bot,
     title: "AI Analysis",
-    description: "Get instant preliminary analysis of skin conditions using advanced AI technology",
-    route: "/analysis"
+    description:
+      "Get instant preliminary analysis of skin conditions using advanced AI technology",
+    route: "/analysis",
   },
   {
     icon: Calendar,
     title: "Easy Booking",
-    description: "Schedule appointments with certified dermatologists at your convenience",
-    route: "/booking"
+    description:
+      "Schedule appointments with certified dermatologists at your convenience",
+    route: "/doctors",
   },
   {
     icon: MessageSquare,
     title: "Secure Chat",
-    description: "Communicate directly with healthcare providers through our secure platform",
-    route: "/chat"
-  }
+    description:
+      "Communicate directly with healthcare providers through our secure platform",
+    route: "/chat",
+  },
 ];
 
 const Services = () => {
@@ -33,7 +35,7 @@ const Services = () => {
       <Navbar />
       <main className="pt-20">
         <div className="container py-12">
-          <motion.div 
+          <motion.div
             className="text-center mb-12"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}

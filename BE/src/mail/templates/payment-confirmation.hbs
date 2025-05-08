@@ -1,0 +1,101 @@
+<html>
+  <head>
+    <meta charset='utf-8' />
+    <title>Payment Confirmation</title>
+    <style>
+      body { margin: 0; padding: 0; background-color: #f2f2f2; font-family:
+      Arial, sans-serif; } .email-container { max-width: 600px; margin: 30px
+      auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; }
+      .header { background-color: #4c68d7; padding: 20px; text-align: center;
+      color: #ffffff; } .header h1 { margin: 0; font-size: 24px; font-weight:
+      600; } .content { padding: 20px; } .content p { margin: 16px 0;
+      line-height: 1.5; color: #333333; } .info-box { background-color: #f7f7f7;
+      border-radius: 4px; padding: 20px; margin: 20px 0; } .info-box strong {
+      display: inline-block; margin-bottom: 8px; color: #555555; }
+      .payment-details { background-color: #edf7ed; border-left: 4px solid
+      #4CAF50; padding: 15px; margin: 20px 0; } .payment-amount { font-size:
+      24px; font-weight: bold; color: #4CAF50; text-align: center; margin: 10px
+      0; } .avatar-container { text-align: center; margin: 20px 0; } .avatar {
+      width: 80px; height: 80px; border-radius: 50%; object-fit: cover; }
+      .footer { text-align: center; padding: 20px; color: #888888; font-size:
+      14px; } .button-container { text-align: center; margin: 25px 0; }
+      .view-appointment-button { display: inline-block; background-color:
+      #4c68d7; color: white; padding: 12px 24px; text-decoration: none;
+      border-radius: 4px; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <div class='email-container'>
+      <!-- Header Section -->
+      <div class='header'>
+        <h1>Payment Confirmation</h1>
+      </div>
+
+      <!-- Main Content Section -->
+      <div class='content'>
+        <p>Hello {{patientName}},</p>
+        <p>
+          Thank you for your payment. Your appointment with Dr.
+          <strong>{{doctorName}}</strong>
+          has been confirmed.
+        </p>
+
+        <!-- Payment Details Box -->
+        <div class='payment-details'>
+          <strong>Payment Details:</strong>
+          <p>
+            <strong>Amount:</strong>
+            <div class='payment-amount'>${{amount}}</div>
+            {{!-- <strong>Transaction ID:</strong>
+            {{transactionId}}<br />
+            <strong>Payment Date:</strong> --}}
+            {{paymentDate}}
+          </p>
+        </div>
+
+        <!-- Appointment Details Box -->
+        <div class='info-box'>
+          <strong>Appointment Details:</strong>
+          <p>
+            <strong>From:</strong>
+            {{appointmentStartTime}}
+            <br />
+            <strong>To:</strong>
+            {{appointmentEndTime}}
+          </p>
+        </div>
+
+        <div class='button-container'>
+          <a href='{{appointmentUrl}}' class='view-appointment-button'>View
+            Appointment</a>
+        </div>
+
+        <p>
+          If you have any questions about your payment or appointment, please
+          contact Dr.
+          {{doctorName}}
+          at
+          <a href='mailto:{{doctorEmail}}'>{{doctorEmail}}</a>.
+        </p>
+
+        <!-- Doctor Avatar -->
+        <div class='avatar-container'>
+          <img src='{{doctorAvatar}}' alt='Doctor Avatar' class='avatar' />
+        </div>
+
+        <p>Thank you for choosing our services.</p>
+        <p>
+          Best regards,<br />
+          Your Healthcare Team
+        </p>
+      </div>
+
+      <!-- Footer Section -->
+      <div class='footer'>
+        &copy;
+        {{year}}
+        DermaAI Skinning Cancer Prediction Platform
+      </div>
+    </div>
+  </body>
+</html>

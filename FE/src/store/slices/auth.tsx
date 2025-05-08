@@ -1,4 +1,3 @@
-import { toast } from "react-toastify";
 import { StateCreator } from "zustand";
 import { persist, PersistOptions } from "zustand/middleware";
 import {
@@ -46,8 +45,6 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
         "/auth/register",
         data
       );
-      set({ userInfo: response });
-      localStorage.setItem("access_token", response.accessToken);
       return response;
     } catch (error) {
       console.log("error", error);
@@ -55,7 +52,6 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
     }
   },
   login: async (data: LoginParams): Promise<LoginResponse> => {
-    console.log("data login", data);
     try {
       const { data: dataResponse } = await axiosInitialClient.post(
         "/auth/login",
@@ -75,8 +71,10 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
   logout: async () => {
     const { userInfo } = get();
 
+    const userId = userInfo.userId ?? userInfo.id;
+
     try {
-      await axiosInitialClient.post(`/auth/logout/${userInfo.userId}`);
+      await axiosInitialClient.post(`/auth/logout/${userId}`);
 
       set({
         userInfo: undefined,
@@ -84,7 +82,6 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
 
       localStorage.removeItem("access_token");
 
-      toast.success("Logged out successfully");
       get().removeUserInfo();
     } catch (error) {
       console.log("error", error);

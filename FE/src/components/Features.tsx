@@ -14,7 +14,7 @@ const features = [
     title: "Easy Booking",
     description:
       "Schedule appointments with certified dermatologists at your convenience",
-    route: "/booking",
+    route: "/doctors",
   },
   {
     icon: MessageSquare,

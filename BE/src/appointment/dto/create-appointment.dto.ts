@@ -8,7 +8,6 @@ export class CreateAppointmentDto {
   @IsString()
   notes?: string;
 
-  @IsOptional()
   @IsString()
-  patientId?: string;
+  patientId: string;
 }

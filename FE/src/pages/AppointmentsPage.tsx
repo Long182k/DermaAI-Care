@@ -285,13 +285,13 @@ const AppointmentsPage = () => {
                     </div>
 
                     <div className="flex flex-wrap gap-2 mt-4">
-                      <Button
+                      {/* <Button
                         variant="outline"
                         size="sm"
                         onClick={() => handleReschedule(appointment.id)}
                       >
                         Reschedule
-                      </Button>
+                      </Button> */}
                       <Button
                         variant="outline"
                         size="sm"

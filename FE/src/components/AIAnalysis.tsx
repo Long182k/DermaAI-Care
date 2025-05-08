@@ -12,39 +12,65 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BackButton } from "./common/BackButton";
+import { useMutation } from "@tanstack/react-query";
+import { analyzeImage, DetectionResponse } from "@/api/detection";
+import { Badge } from "@/components/ui/badge";
+import { useNavigate } from "react-router-dom";
 
 export const AIAnalysis = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [analysisResult, setAnalysisResult] =
+    useState<DetectionResponse | null>(null);
+
+  // Use React Query's useMutation for the API call
+  const { mutate, isPending } = useMutation({
+    mutationFn: analyzeImage,
+    onSuccess: (data) => {
+      setAnalysisResult(data);
+    },
+    onError: (error) => {
+      console.error("Error analyzing image:", error);
+    },
+  });
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      setSelectedFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         setSelectedImage(reader.result as string);
       };
       reader.readAsDataURL(file);
+      // Reset analysis result when a new image is uploaded
+      setAnalysisResult(null);
     }
   };
 
   const handleAnalyze = () => {
-    setIsAnalyzing(true);
-    // Simulating analysis delay
-    setTimeout(() => {
-      setIsAnalyzing(false);
-    }, 2000);
+    if (selectedFile) {
+      mutate(selectedFile);
+    }
   };
+  const navigate = useNavigate(); // <-- Add this line
 
   return (
     <div className="w-full max-w-4xl mx-auto p-6">
       <BackButton route="services" />
-
+      <div className="flex justify-end mb-4">
+        <Button
+          variant="outline"
+          onClick={() => navigate("/prediction-history")}
+        >
+          Prediction History
+        </Button>
+      </div>
       <Card className="w-full">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Brain className="h-6 w-6 text-primary" />
-            AI Skin Analysis
+            AI Skin Cancer Prediction
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -85,10 +111,10 @@ export const AIAnalysis = () => {
               </div>
               <Button
                 onClick={handleAnalyze}
-                disabled={!selectedImage || isAnalyzing}
+                disabled={!selectedImage || isPending}
                 className="w-full"
               >
-                {isAnalyzing ? (
+                {isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Analyzing...
@@ -106,9 +132,58 @@ export const AIAnalysis = () => {
                 <CardTitle className="text-lg">Analysis Results</CardTitle>
               </CardHeader>
               <CardContent>
-                {isAnalyzing ? (
+                {isPending ? (
                   <div className="flex items-center justify-center h-48">
                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  </div>
+                ) : analysisResult ? (
+                  <div className="space-y-4">
+                    {analysisResult.imageWithBoxesUrl ? (
+                      <div className="rounded-lg overflow-hidden">
+                        <img
+                          src={analysisResult.imageWithBoxesUrl}
+                          alt="Analysis Result"
+                          className="w-full h-auto"
+                        />
+                      </div>
+                    ) : null}
+
+                    <div className="space-y-2">
+                      <h3 className="font-medium">Detected Lesions:</h3>
+                      {analysisResult.detections.length > 0 ? (
+                        <ul className="space-y-2">
+                          {analysisResult.detections.map((detection, index) => (
+                            <li
+                              key={index}
+                              className="p-2 bg-background rounded-md"
+                            >
+                              <div className="flex justify-between items-center">
+                                <Badge
+                                  variant="outline"
+                                  className="font-semibold"
+                                >
+                                  {detection.class}
+                                </Badge>
+                                <span className="text-sm">
+                                  Confidence:{" "}
+                                  {/* {(detection.class_confidence * 100).toFixed(
+                                    1
+                                  )} */}
+                                  {(
+                                    detection.detection_confidence * 100
+                                  ).toFixed(1)}
+                                  %
+                                </span>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-muted-foreground">
+                          No lesions detected
+                        </p>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center text-muted-foreground">

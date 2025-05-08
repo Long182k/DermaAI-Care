@@ -1,5 +1,12 @@
 import { Button } from "@/components/ui/button";
-import { UserCircle, Globe, Calendar, Bell, Stethoscope } from "lucide-react";
+import {
+  UserCircle,
+  Globe,
+  Calendar,
+  Bell,
+  Stethoscope,
+  FileImage,
+} from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -62,18 +69,10 @@ export const Navbar = () => {
     },
   });
 
-  const handleLanguageChange = (code: string) => {
-    // For now, just log the selection. In a real app, this would update the app's language
-    console.log(`Language changed to: ${code}`);
-  };
-
-  // Mock notification count for demo purposes
-  const notificationCount = 3;
-
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b">
       <div className="container flex items-center justify-between h-16">
-        <Link to="/" className="text-xl font-bold text-primary">
+        <Link to="/" className="text-2xl font-bold text-primary tracking-tight">
           DermAI Care
         </Link>
 
@@ -87,18 +86,23 @@ export const Navbar = () => {
           <Button variant="ghost" onClick={() => navigate("/services")}>
             Services
           </Button>
-          <Button variant="ghost" onClick={() => navigate("/doctors")}>
-            Doctors
-          </Button>
           <Button variant="ghost" onClick={() => navigate("/contact")}>
             Contact
           </Button>
-
           {/* Appointments Button */}
-          <Button variant="ghost" onClick={() => navigate("/appointments")}>
+          {/* <Button variant="ghost" onClick={() => navigate("/appointments")}>
             <Calendar className="h-5 w-5 mr-2" />
             Appointments
-          </Button>
+          </Button> */}
+
+          {/* Prediction History Button */}
+          {/* <Button
+            variant="ghost"
+            onClick={() => navigate("/prediction-history")}
+          >
+            <FileImage className="h-5 w-5 mr-2" />
+            Prediction History
+          </Button> */}
 
           {/* User Menu */}
           {userInfo && Object.keys(userInfo).length > 0 ? (
@@ -114,8 +118,16 @@ export const Navbar = () => {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => navigate("/profile")}>
-                  Profile
+                <DropdownMenuItem
+                  onClick={() =>
+                    navigate(
+                      userInfo.role === "ADMIN"
+                        ? "/admin-dashboard"
+                        : "/profile"
+                    )
+                  }
+                >
+                  {userInfo.role === "ADMIN" ? "Dashboard" : "Profile"}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {

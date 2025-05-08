@@ -10,31 +10,30 @@ datasource db {
 model User {
   id String @id @default(uuid())
 
-  userName            String           @unique
+  userName            String         @unique
   firstName           String?
   lastName            String?
-  email               String           @unique
-  role                Role             @default(PATIENT)
+  email               String         @unique
+  role                Role           @default(PATIENT)
   password            String
   dateOfBirth         DateTime?
   experience          Int?
   education           String?
   certifications      String?
   phoneNumber         String?
-  gender              Gender?          @default(MALE)
-  languages           Languages?       @default(English)
+  gender              Gender?        @default(MALE)
   hashedPassword      String
   avatarUrl           String?
   hashedRefreshToken  String?
-  createdAt           DateTime         @default(now())
-  isActive            Boolean          @default(true)
-  lastLoginAt         DateTime         @default(now())
-  PatientAppointments Appointment[]    @relation("PatientAppointments")
-  DoctorAppointments  Appointment[]    @relation("DoctorAppointments")
+  createdAt           DateTime       @default(now())
+  isActive            Boolean        @default(true)
+  lastLoginAt         DateTime       @default(now())
+  PatientAppointments Appointment[]  @relation("PatientAppointments")
+  DoctorAppointments  Appointment[]  @relation("DoctorAppointments")
   Payments            Payment[]
   Notifications       Notification[]
-  AIDiagnosisJobs     AIDiagnosisJob[]
-  Schedule            Schedule[]       @relation("DoctorSchedules")
+  Predictions         Prediction[]
+  Schedule            Schedule[]     @relation("DoctorSchedules")
 
   @@index([email])
   @@index([userName])
@@ -59,13 +58,13 @@ model Schedule {
 }
 
 model Appointment {
-  id         String   @id @default(uuid())
+  id         String            @id @default(uuid())
   patientId  String
   doctorId   String
-  status     String
+  status     AppointmentStatus @default(PENDING)
   notes      String?
-  createdAt  DateTime @default(now())
-  scheduleId String   @unique
+  createdAt  DateTime          @default(now())
+  scheduleId String            @unique
 
   Patient      User           @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
   Doctor       User           @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
@@ -119,7 +118,7 @@ model Notification {
   @@index([paymentId])
 }
 
-model AIDiagnosisJob {
+model Prediction {
   id                String   @id @default(uuid())
   userId            String
   imageUrl          String
@@ -154,10 +153,9 @@ enum ScheduleStatus {
   CANCELLED
 }
 
-enum Languages {
-  English
-  Spanish
-  French
-  Japanese
-  Vietnamese
+enum AppointmentStatus {
+  PENDING
+  BOOKED
+  CANCELLED
+  CONFIRMED
 }

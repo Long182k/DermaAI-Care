@@ -232,11 +232,7 @@ export class AppointmentService {
     const userId = currentUser.id ?? currentUser.userId;
 
     // Check permissions
-    if (
-      currentUser.role !== 'ADMIN' &&
-      appointment.patientId !== userId &&
-      appointment.doctorId !== userId
-    ) {
+    if (appointment.patientId !== userId && appointment.doctorId !== userId) {
       throw new ForbiddenException(
         'You do not have permission to cancel this appointment',
       );

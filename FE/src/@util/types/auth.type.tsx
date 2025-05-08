@@ -20,6 +20,8 @@ type ROLE = "USER" | "ADMIN";
 
 export type User = {
   id: string;
+  phoneNumber: string;
+  gender: string;
   userId: string;
   userName: string;
   email: string;

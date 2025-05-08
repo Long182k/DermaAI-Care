@@ -1,4 +1,3 @@
-import { toast } from "react-toastify";
 import { StateCreator } from "zustand";
 import { persist, PersistOptions } from "zustand/middleware";
 import {
@@ -85,7 +84,6 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
 
       localStorage.removeItem("access_token");
 
-      toast.success("Logged out successfully");
       get().removeUserInfo();
     } catch (error) {
       console.log("error", error);

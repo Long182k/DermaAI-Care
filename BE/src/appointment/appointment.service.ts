@@ -66,9 +66,19 @@ export class AppointmentService {
           Schedule: true,
         },
       });
-      // Create reminder
-      await tx.reminder.create({
+      // Create notification to users' email.
+      await tx.notification.create({
         data: {
+          userId: patientId,
+          appointmentId: appointment.id,
+          method: 'EMAIL',
+        },
+      });
+
+      // You might also want to create a notification for the doctor
+      await tx.notification.create({
+        data: {
+          userId: schedule.doctorId, // Notification for the doctor
           appointmentId: appointment.id,
           method: 'EMAIL',
         },

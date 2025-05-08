@@ -16,6 +16,8 @@ import { AppointmentModule } from './appointment/appointment.module';
 import { ScheduleModule } from './schedule/schedule.module';
 import { PaymentModule } from './payment/payment.module';
 import { PaymentController } from './payment/payment.controller';
+import { PredictionModule } from './prediction/prediction.module';
+import { StatisticsModule } from './statistics/statistics.module';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { PaymentController } from './payment/payment.controller';
     AppointmentModule,
     ScheduleModule,
     PaymentModule,
+    PredictionModule,
+    StatisticsModule,
   ],
   controllers: [UsersController, PaymentController],
   providers: [

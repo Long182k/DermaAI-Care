@@ -44,8 +44,8 @@ const Contact = () => {
             <div className="text-center p-6 rounded-lg border bg-card hover:shadow-lg transition-all">
               <MapPin className="h-12 w-12 text-primary mx-auto mb-4" />
               <h3 className="text-xl font-semibold mb-2">Office</h3>
-              <p className="text-muted-foreground">123 Healthcare Avenue</p>
-              <p className="text-muted-foreground">San Francisco, CA 94105</p>
+              <p className="text-muted-foreground">International University</p>
+              <p className="text-muted-foreground">Quarter 6, Linh Trung Ward, Thu Duc District, HCMC</p>
             </div>
           </motion.div>
         </div>

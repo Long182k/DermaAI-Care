@@ -14,6 +14,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { predictionApi } from "@/api/detection";
 import { Navbar } from "@/components/Navbar";
+import type { DetectionResponse } from "@/api/detection";
 
 // Define filter types
 type FilterType = "day" | "week" | "month" | "all";
@@ -25,7 +26,7 @@ interface Prediction {
   imageWithBoxesUrl: string | null;
   status: string;
   createdAt: string;
-  result: any;
+  result: DetectionResponse;
 }
 
 const PredictionHistoryPage = () => {
@@ -158,7 +159,7 @@ const PredictionHistoryPage = () => {
       </div>
 
       <div className="mb-6 flex justify-between items-center">
-        <h2 className="text-xl font-medium">Analysis Results</h2>
+        <h2 className="text-xl font-medium"></h2>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => navigate("/analysis")}>
             New Analysis
@@ -228,16 +229,18 @@ const PredictionHistoryPage = () => {
 
                 <CardContent className="flex-1 p-6">
                   <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
-                    <div>
+                    <div className="flex items-center gap-3 flex-wrap">
                       <h3 className="text-xl font-semibold">
                         {prediction.result?.detections?.[0]?.class
                           ? `Detected: ${prediction.result.detections[0].class}`
                           : "Skin Analysis Result"}
                       </h3>
-                      {/* <p className="text-muted-foreground">
-                        {prediction.result?.message ||
-                          "AI-powered skin lesion analysis"}
-                      </p> */}
+                      {prediction.result?.detections?.[0]?.explanation
+                        ?.name && (
+                        <span className="text-base text-muted-foreground font-medium ml-2">
+                          {prediction.result.detections[0].explanation.name}
+                        </span>
+                      )}
                     </div>
                     <span
                       className={`px-3 py-1 rounded-full text-xs font-medium mt-2 md:mt-0 ${getStatusColor(
@@ -247,6 +250,60 @@ const PredictionHistoryPage = () => {
                       {prediction.status}
                     </span>
                   </div>
+                  {/* Explanation Section */}
+                  {prediction.result?.detections?.[0]?.explanation && (
+                    <div className="bg-gray-50 rounded-md p-4 mt-2 space-y-2 border border-gray-100">
+                      <div>
+                        <h4 className="font-medium text-sm text-muted-foreground mb-1">
+                          What is it?
+                        </h4>
+                        <p className="text-base font-normal">
+                          {
+                            prediction.result.detections[0].explanation
+                              .description
+                          }
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-4">
+                        <div className="flex-1 min-w-[120px]">
+                          <h4 className="font-medium text-sm text-muted-foreground mb-1">
+                            Status
+                          </h4>
+                          <span className="text-sm">
+                            {prediction.result.detections[0].explanation
+                              .isCancerous === true && (
+                              <span className="text-red-600 font-semibold">
+                                Cancerous
+                              </span>
+                            )}
+                            {prediction.result.detections[0].explanation
+                              .isCancerous === false && (
+                              <span className="text-green-600 font-semibold">
+                                Non-cancerous
+                              </span>
+                            )}
+                            {prediction.result.detections[0].explanation
+                              .isCancerous === null && (
+                              <span className="text-gray-600 font-semibold">
+                                Unknown
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <h4 className="font-medium text-sm text-muted-foreground mb-1">
+                          Recommendation
+                        </h4>
+                        <p className="text-base font-normal">
+                          {
+                            prediction.result.detections[0].explanation
+                              .recommendation
+                          }
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </div>
             </Card>

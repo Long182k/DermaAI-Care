@@ -1,3 +1,4 @@
+import { Gender } from '@prisma/client';
 import {
   IsDateString,
   IsNotEmpty,
@@ -14,8 +15,18 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
-  @Length(0, 500)
-  bio?: string;
+  @Length(0, 10)
+  gender?: Gender;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 20)
+  phoneNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 50)
+  email?: string;
 
   @IsOptional()
   @IsDateString()

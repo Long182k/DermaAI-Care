@@ -66,7 +66,7 @@ export class AppointmentController {
     );
   }
 
-  @Delete(':id')
+  @Patch(':id/cancel')
   async cancelAppointment(
     @Param('id') id: string,
     @CurrentUser() currentUser: User,

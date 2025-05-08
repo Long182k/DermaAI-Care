@@ -1,4 +1,5 @@
 import { axiosClient } from "./axiosConfig";
+
 export interface DetectionResponse {
   id: string;
   imageUrl: string;
@@ -9,6 +10,13 @@ export interface DetectionResponse {
     detection_confidence: number;
     class: string;
     class_confidence: number;
+    explanation?: {
+      name: string;
+      description: string;
+      isCancerous: boolean | null;
+      severity: string;
+      recommendation: string;
+    };
   }[];
 }
 

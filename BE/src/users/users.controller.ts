@@ -34,17 +34,6 @@ export class UsersController {
     return this.usersService.findAllDoctors();
   }
 
-  @Get('/email_param/:email')
-  findOne(@Param('email') email: string) {
-    return this.usersService.findOne(email);
-  }
-
-  @Get('/email_query')
-  findOne2(@Query('email') email: string) {
-    return this.usersService.findOne(email);
-  }
-
-  @Roles(ROLE.ADMIN)
   @Get('/keyword')
   async findUserByKeyword(@Body() keyword: GetUserByKeywordDTO) {
     return await this.usersService.findUserByKeyword(keyword);

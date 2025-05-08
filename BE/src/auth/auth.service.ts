@@ -189,7 +189,6 @@ export class AuthService {
   }
 
   async validateJWTUser(userId: string) {
-    console.log('🚀 userId validateJWTUser:', userId);
     const user = await this.usersService.findUserByKeyword({ id: userId });
 
     if (!user || !user.hashedRefreshToken) {

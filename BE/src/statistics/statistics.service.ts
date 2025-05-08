@@ -31,7 +31,7 @@ export class StatisticsService {
     const totalDoctors = await this.prisma.user.count({
       where: { role: Role.DOCTOR },
     });
-    const totalPredictions = await this.prisma.aIDiagnosisJob.count();
+    const totalPredictions = await this.prisma.prediction.count();
     const totalAppointments = await this.prisma.appointment.count();
     const totalPayments = await this.prisma.payment.count();
 
@@ -87,7 +87,7 @@ export class StatisticsService {
       select: { createdAt: true },
     });
 
-    const predictions = await this.prisma.aIDiagnosisJob.findMany({
+    const predictions = await this.prisma.prediction.findMany({
       where: {
         createdAt: {
           gte: startOfYear,
@@ -221,11 +221,11 @@ export class StatisticsService {
         firstName: true,
         lastName: true,
         _count: {
-          select: { AIDiagnosisJobs: true },
+          select: { Predictions: true },
         },
       },
       orderBy: {
-        AIDiagnosisJobs: { _count: 'desc' },
+        Predictions: { _count: 'desc' },
       },
       take: 10,
     });
@@ -259,7 +259,7 @@ export class StatisticsService {
         })),
         topPatientsByPredictions: patientsWithPredictions.map((p) => ({
           name: this.formatUserName(p),
-          count: p._count.AIDiagnosisJobs,
+          count: p._count.Predictions,
         })),
       },
     };
@@ -339,71 +339,102 @@ export class StatisticsService {
   }
 
   async getPredictions() {
-    // Get basic prediction statistics
-    const totalPredictions = await this.prisma.aIDiagnosisJob.count();
+    // Define the lesion classes of interest
+    const CLASS_MAP = {
+      MEL: 'Melanoma',
+      NV: 'Nevus',
+      BCC: 'Basal Cell Carcinoma',
+      AK: 'Actinic Keratosis',
+      BKL: 'Benign Keratosis',
+      DF: 'Dermatofibroma',
+      VASC: 'Vascular Lesion',
+      SCC: 'Squamous Cell Carcinoma',
+    };
+    const classKeys = Object.keys(CLASS_MAP);
 
-    // Get predictions by status
-    const predictionsByStatus = await this.prisma.aIDiagnosisJob.groupBy({
-      by: ['status'],
-      _count: { id: true },
+    // Fetch all predictions (limit if needed for performance)
+    const predictions = await this.prisma.prediction.findMany({
+      select: { result: true, createdAt: true },
     });
 
-    // Get predictions by month (for current year)
-    const currentYear = new Date().getFullYear();
-    const startOfYear = new Date(currentYear, 0, 1);
+    // Count detections by class
+    const classCounts: Record<string, number> = {};
+    let totalDetections = 0;
 
-    const predictionsByMonth = await this.prisma.aIDiagnosisJob.findMany({
-      where: { createdAt: { gte: startOfYear } },
-      select: {
-        id: true,
-        createdAt: true,
-        status: true,
-      },
-    });
-
-    // Process data for monthly chart
-    const monthlyData = Array(12).fill(0);
-    predictionsByMonth.forEach((prediction) => {
-      const month = new Date(prediction.createdAt).getMonth();
-      monthlyData[month]++;
-    });
-
-    // Get prediction results distribution
-    // Note: This is a simplified approach as the actual result structure would need to be examined
-    const predictions = await this.prisma.aIDiagnosisJob.findMany({
-      select: {
-        result: true,
-      },
-      take: 100, // Limit to avoid performance issues
-    });
-
-    // Extract diagnosis types from results (simplified approach)
-    const diagnosisTypes = {};
-    predictions.forEach((prediction) => {
+    for (const prediction of predictions) {
       try {
         const result = prediction.result;
-        if (result && typeof result === 'object') {
-          // Type assertion to access properties safely
-          const resultObj = result as Record<string, any>;
-          const diagnosisType =
-            resultObj.diagnosisType || resultObj.type || 'Unknown';
-          diagnosisTypes[diagnosisType] =
-            (diagnosisTypes[diagnosisType] || 0) + 1;
+        if (
+          result &&
+          typeof result === 'object' &&
+          !Array.isArray(result) &&
+          Array.isArray((result as any).detections)
+        ) {
+          for (const detection of (result as any).detections) {
+            const lesionClass = detection.class;
+            if (classKeys.includes(lesionClass)) {
+              classCounts[lesionClass] = (classCounts[lesionClass] || 0) + 1;
+              totalDetections++;
+            }
+          }
         }
-      } catch (error) {
-        // Handle parsing errors
+      } catch (err) {
+        // Ignore parse errors
       }
+    }
+
+    // Prepare data for chart: array of { class, name, count, percent }
+    const lesionDistribution = classKeys.map((key) => {
+      // Find the most recent detection with explanation for this class
+      let isCancerous: boolean | null = null;
+      for (let i = predictions.length - 1; i >= 0; i--) {
+        const result = predictions[i].result;
+        if (
+          result &&
+          typeof result === 'object' &&
+          !Array.isArray(result) &&
+          Array.isArray((result as any).detections)
+        ) {
+          for (const detection of (result as any).detections) {
+            if (detection.class === key && detection.explanation) {
+              isCancerous = detection.explanation.isCancerous;
+              break;
+            }
+          }
+        }
+        if (isCancerous !== null) break;
+      }
+      return {
+        class: key,
+        name: CLASS_MAP[key],
+        count: classCounts[key] || 0,
+        percent:
+          totalDetections > 0
+            ? Math.round(((classCounts[key] || 0) / totalDetections) * 100)
+            : 0,
+        isCancerous,
+      };
     });
+
+    // Prepare monthly predictions data
+    const monthlyCounts = Array(12).fill(0);
+    for (const prediction of predictions) {
+      const createdAt = prediction.createdAt
+        ? new Date(prediction.createdAt)
+        : null;
+      if (createdAt) {
+        const month = createdAt.getMonth();
+        monthlyCounts[month]++;
+      }
+    }
 
     return {
       summary: {
-        totalPredictions,
-        predictionsByStatus: predictionsByStatus.map((item) => ({
-          status: item.status,
-          count: item._count.id,
-        })),
+        totalPredictions: predictions.length,
+        lesionDistribution,
       },
       charts: {
+        lesionDistribution,
         monthlyPredictions: {
           labels: [
             'Jan',
@@ -419,14 +450,8 @@ export class StatisticsService {
             'Nov',
             'Dec',
           ],
-          data: monthlyData,
+          data: monthlyCounts,
         },
-        diagnosisDistribution: Object.entries(diagnosisTypes).map(
-          ([type, count]) => ({
-            type,
-            count,
-          }),
-        ),
       },
     };
   }
@@ -518,6 +543,38 @@ export class StatisticsService {
         ? (completedAppointments / totalAppointments) * 100
         : 0;
 
+    const confirmedAppointments = await this.prisma.appointment.findMany({
+      where: { status: 'CONFIRMED' },
+      select: {
+        id: true,
+        createdAt: true,
+        Schedule: {
+          select: { startTime: true },
+        },
+      },
+    });
+    const daysOfWeek = [
+      'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+    ];
+    const appointmentsByDay = daysOfWeek.map((day) => ({ day, count: 0 }));
+    confirmedAppointments.forEach((appointment) => {
+      const date = appointment.Schedule?.startTime
+        ? new Date(appointment.Schedule.startTime)
+        : appointment.createdAt
+          ? new Date(appointment.createdAt)
+          : null;
+      if (date) {
+        const dayIndex = date.getDay();
+        appointmentsByDay[dayIndex].count += 1;
+      }
+    });
+
     return {
       summary: {
         totalAppointments,
@@ -560,6 +617,101 @@ export class StatisticsService {
           endTime: appointment.Schedule.endTime,
           status: appointment.status,
         })),
+        appointmentsByDay,
+      },
+    };
+  }
+
+  async getPaymentStatistics() {
+    // Get all payments
+    const payments = await this.prisma.payment.findMany();
+
+    // Total payments
+    const totalPayments = payments.length;
+
+    // Total completed payments
+    const completedPayments = payments.filter(
+      (p) => p.status === 'COMPLETED',
+    ).length;
+
+    // Total pending payments
+    const pendingPayments = payments.filter(
+      (p) => p.status === 'PENDING',
+    ).length;
+
+    // Total amount (completed)
+    const totalAmountCompleted = payments
+      .filter((p) => p.status === 'COMPLETED')
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+
+    // Payments by status
+    const paymentsByStatus = ['COMPLETED', 'PENDING', 'FAILED'].map(
+      (status) => ({
+        status,
+        count: payments.filter((p) => p.status === status).length,
+        totalAmount: payments
+          .filter((p) => p.status === status)
+          .reduce((sum, p) => sum + Number(p.amount), 0),
+      }),
+    );
+
+    // Payments by day (for chart)
+    const daysOfWeek = [
+      'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+    ];
+    const paymentsByDay = daysOfWeek.map((day) => ({
+      day,
+      count: 0,
+      totalAmount: 0,
+    }));
+    payments.forEach((payment) => {
+      const date = new Date(payment.createdAt);
+      const dayIndex = date.getDay();
+      paymentsByDay[dayIndex].count += 1;
+      paymentsByDay[dayIndex].totalAmount += Number(payment.amount);
+    });
+
+    // Payments by month (for chart)
+    const monthlyPayments = Array(12).fill(0);
+    payments.forEach((payment) => {
+      const date = new Date(payment.createdAt);
+      const month = date.getMonth();
+      monthlyPayments[month] += Number(payment.amount);
+    });
+
+    return {
+      summary: {
+        totalPayments,
+        completedPayments,
+        pendingPayments,
+        totalAmountCompleted,
+        paymentsByStatus,
+      },
+      charts: {
+        paymentsByDay,
+        monthlyPayments: {
+          labels: [
+            'Jan',
+            'Feb',
+            'Mar',
+            'Apr',
+            'May',
+            'Jun',
+            'Jul',
+            'Aug',
+            'Sep',
+            'Oct',
+            'Nov',
+            'Dec',
+          ],
+          data: monthlyPayments,
+        },
       },
     };
   }

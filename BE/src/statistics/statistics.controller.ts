@@ -56,4 +56,14 @@ export class StatisticsController {
   getAppointments() {
     return this.statisticsService.getAppointments();
   }
+
+  @Get('payments')
+  @ApiOperation({ summary: 'Get payment statistics' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns payment statistics for dashboard visualization'
+  })
+  async getPaymentStatistics() {
+    return this.statisticsService.getPaymentStatistics();
+  }
 }

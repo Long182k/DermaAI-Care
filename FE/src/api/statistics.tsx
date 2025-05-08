@@ -79,6 +79,31 @@ export interface AppointmentStats {
   };
 }
 
+export interface PaymentStats {
+  summary: {
+    totalPayments: number;
+    completedPayments: number;
+    pendingPayments: number;
+    totalAmountCompleted: number;
+    paymentsByStatus: Array<{
+      status: string;
+      count: number;
+      totalAmount: number;
+    }>;
+  };
+  charts: {
+    paymentsByDay: Array<{
+      day: string;
+      count: number;
+      totalAmount: number;
+    }>;
+    monthlyPayments: {
+      labels: string[];
+      data: number[];
+    };
+  };
+}
+
 // API functions
 export const statisticsApi = {
   getOverview: async (): Promise<OverviewStats> => {
@@ -105,6 +130,11 @@ export const statisticsApi = {
     const response = await axiosClient.get(
       `${API_URL}/statistics/appointments`
     );
+    return response.data;
+  },
+
+  getPayments: async (): Promise<PaymentStats> => {
+    const response = await axiosClient.get(`${API_URL}/statistics/payments`);
     return response.data;
   },
 };

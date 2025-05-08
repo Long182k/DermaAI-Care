@@ -4,7 +4,6 @@
 /BE/node_modules
 /.pnp
 .pnp.js
-
 # Build outputs
 /dist
 /FE/dist
@@ -13,7 +12,14 @@
 /FE/build
 /BE/build
 /Training/SD-198/*.jpg
+/Training/flask_env/*
 /Training/data/*
+/Training/runs/*
+/Training/*.pth
+/Training/*.pt
+*.docx
+*.csv
+/Training/results/*
 /Training/myenv/*
 /Training/training_model/src/annotated_images/*
 *.keras

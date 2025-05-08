@@ -45,8 +45,6 @@ const createAuthState: StateCreator<AuthStore> = (set, get) => ({
         "/auth/register",
         data
       );
-      // set({ userInfo: response });
-      // localStorage.setItem("access_token", response.accessToken);
       return response;
     } catch (error) {
       console.log("error", error);

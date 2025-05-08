@@ -119,4 +119,9 @@ export const appointmentApi = {
     );
     return response.data;
   },
+
+  cancelAppointment: async (id: string) => {
+    const response = await axiosClient.patch(`/appointments/${id}/cancel`);
+    return response.data;
+  },
 };

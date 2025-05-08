@@ -1,18 +1,18 @@
 import { Navbar } from "@/components/Navbar";
 import { motion } from "framer-motion";
 import {
-  BookOpen,
-  Calendar,
-  MessageSquare,
-  Globe,
-  Brain,
   Bell,
-  Mail,
+  Brain,
+  Calendar,
+  CreditCard,
+  MessageSquare
 } from "lucide-react";
 
-import bookingImg from "@/assets/images/booking.jpg";
+import { default as bookingImg } from "@/assets/images/booking.jpg";
+import { default as email_notification } from "@/assets/images/email_notification.jpg";
+import { default as AI_powered_analysis } from "@/assets/images/facial.jpg";
 import consultationImg from "@/assets/images/instant.jpg";
-import educationImg from "@/assets/images/education.jpg";
+import { default as paymentImg } from "@/assets/images/online_payment.jpg";
 
 const fadeIn = {
   initial: { opacity: 0, y: 20 },
@@ -108,72 +108,75 @@ const About = () => {
             >
               <div>
                 <div className="flex items-center gap-3 mb-4">
-                  <BookOpen className="h-8 w-8 text-primary" />
+                  <Brain className="h-8 w-8 text-primary" />
                   <h2 className="text-2xl font-semibold">
-                    Patient Education at Your Fingertips
+                    AI-Powered Analysis
                   </h2>
                 </div>
                 <p className="text-muted-foreground">
-                  Learn about common skin conditions, effective treatments, and
-                  practical tips to keep you healthy. Our expertly crafted
-                  guides are designed to be both informative and easy to
-                  understand.
+                  Get instant AI analysis of skin conditions with recommendations. Upload a photo and receive a detailed report powered by advanced machine learning.
                 </p>
               </div>
               <div className="rounded-lg overflow-hidden shadow-lg">
                 <img
-                  src={educationImg}
-                  alt="Education Resources"
+                  src={AI_powered_analysis}
+                  alt="AI Analysis"
                   className="w-full h-64 object-cover"
                 />
               </div>
             </motion.section>
 
-            <motion.div
-              className="grid md:grid-cols-2 lg:grid-cols-4 gap-8"
+            <motion.section
+              className="grid md:grid-cols-2 gap-8 items-center md:flex-row-reverse"
               initial={fadeIn.initial}
               animate={fadeIn.animate}
               transition={{ ...fadeIn.transition, delay: 0.5 }}
             >
-              <div className="p-6 rounded-lg border bg-card hover:shadow-lg transition-all">
-                <Globe className="h-8 w-8 text-primary mb-4" />
-                <h3 className="text-xl font-semibold mb-2">
-                  Multi-Language Support
-                </h3>
+              <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <Bell className="h-8 w-8 text-primary" />
+                  <h2 className="text-2xl font-semibold">
+                    Email Notifications
+                  </h2>
+                </div>
                 <p className="text-muted-foreground">
-                  Available in multiple languages to cater to a global audience.
+                  Stay informed with timely alerts about upcoming appointments, new analysis results, and important health reminders.
                 </p>
               </div>
+              <div className="rounded-lg overflow-hidden shadow-lg">
+                <img
+                  src={email_notification}
+                  alt="Notifications"
+                  className="w-full h-64 object-cover"
+                />
+              </div>
+            </motion.section>
 
-              <div className="p-6 rounded-lg border bg-card hover:shadow-lg transition-all">
-                <Brain className="h-8 w-8 text-primary mb-4" />
-                <h3 className="text-xl font-semibold mb-2">
-                  AI-Powered Analysis
-                </h3>
+            <motion.section
+              className="grid md:grid-cols-2 gap-8 items-center"
+              initial={fadeIn.initial}
+              animate={fadeIn.animate}
+              transition={{ ...fadeIn.transition, delay: 0.6 }}
+            >
+              <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <CreditCard className="h-8 w-8 text-primary" />
+                  <h2 className="text-2xl font-semibold">
+                    Online Payment
+                  </h2>
+                </div>
                 <p className="text-muted-foreground">
-                  Get instant AI analysis of skin conditions with
-                  recommendations.
+                  Pay for your consultations and services securely online. Enjoy a seamless and safe payment experience, so you can focus on your health without any hassle.
                 </p>
               </div>
-
-              <div className="p-6 rounded-lg border bg-card hover:shadow-lg transition-all">
-                <Bell className="h-8 w-8 text-primary mb-4" />
-                <h3 className="text-xl font-semibold mb-2">
-                  Smart Notifications
-                </h3>
-                <p className="text-muted-foreground">
-                  Stay informed with timely alerts about upcoming appointments.
-                </p>
+              <div className="rounded-lg overflow-hidden shadow-lg">
+                <img
+                  src={paymentImg}
+                  alt="Online Payment"
+                  className="w-full h-64 object-cover"
+                />
               </div>
-
-              <div className="p-6 rounded-lg border bg-card hover:shadow-lg transition-all">
-                <Mail className="h-8 w-8 text-primary mb-4" />
-                <h3 className="text-xl font-semibold mb-2">Google Login</h3>
-                <p className="text-muted-foreground">
-                  Quick and secure access with your Google account.
-                </p>
-              </div>
-            </motion.div>
+            </motion.section>
           </div>
 
           <motion.div

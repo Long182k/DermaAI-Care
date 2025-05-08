@@ -112,15 +112,14 @@ export class PaymentService {
       });
 
       if (!existingPayment) {
-        // Create payment record only after successful checkout
         await this.prisma.payment.create({
           data: {
             userId,
             appointmentId,
-            amount: session.amount_total / 100, // Convert from cents to dollars
+            amount: session.amount_total / 100, 
             currency: session.currency.toUpperCase(),
             status: 'COMPLETED',
-            paymentMethod: 'card',
+            paymentMethod: 'VISA',
             transactionId: session.id,
           },
         });
@@ -140,5 +139,49 @@ export class PaymentService {
     });
 
     return payment;
+  }
+
+  async getAppointments() {
+    // Only include CONFIRMED appointments for "Appointments by Day"
+    const confirmedAppointments = await this.prisma.appointment.findMany({
+      where: { status: 'CONFIRMED' },
+      select: {
+        id: true,
+        createdAt: true,
+        status: true,
+        Schedule: {
+          select: { startTime: true }
+        }
+      },
+    });
+
+    // Group by day of week (e.g., Monday, Tuesday, ...)
+    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const appointmentsByDay = daysOfWeek.map((day) => ({
+      day,
+      count: 0,
+    }));
+
+    confirmedAppointments.forEach((appointment) => {
+      const date = appointment.Schedule?.startTime
+        ? new Date(appointment.Schedule.startTime)
+        : appointment.createdAt
+        ? new Date(appointment.createdAt)
+        : null;
+      if (date) {
+        const dayIndex = date.getDay();
+        appointmentsByDay[dayIndex].count += 1;
+      }
+    });
+
+    return {
+      summary: {
+        // ...existing summary fields...
+      },
+      charts: {
+        // ...existing chart fields...
+        appointmentsByDay,
+      },
+    };
   }
 }

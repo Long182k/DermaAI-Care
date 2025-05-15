@@ -316,8 +316,7 @@ const AppointmentsPage = () => {
                           onClick={() => handleCancel(appointment.id)}
                           disabled={
                             cancelAppointmentMutation.isPending &&
-                            cancelAppointmentMutation.variables ===
-                              appointment.id
+                            cancelAppointmentMutation.variables === appointment.id
                           }
                         >
                           {cancelAppointmentMutation.isPending &&

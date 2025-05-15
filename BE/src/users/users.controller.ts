@@ -4,7 +4,6 @@ import {
   Get,
   Param,
   Patch,
-  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -16,6 +15,15 @@ import { CloudinaryService } from 'src/file/file.service';
 import { GetUserByKeywordDTO } from './dto/get-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
+
+class EditUserNamesDto {
+  firstName?: string;
+  lastName?: string;
+}
+
+class ChangeUserActiveDto {
+  isActive: boolean;
+}
 
 @Controller('users')
 export class UsersController {
@@ -55,5 +63,25 @@ export class UsersController {
   ) {
     const uploadedFile = await this.cloudinaryService.uploadFile(file);
     return await this.usersService.updateAvatar(userId, uploadedFile.url);
+  }
+
+  @Patch('/admin/edit-names/:userId')
+  @Roles(ROLE.ADMIN)
+  async editUserNames(
+    @Param('userId') userId: string,
+    @Body() dto: EditUserNamesDto,
+  ) {
+    console.log('editUserNames', userId, dto);
+    return this.usersService.editUserNames(userId, dto);
+  }
+
+  @Patch('/admin/change-active/:userId')
+  @Roles(ROLE.ADMIN)
+  async changeUserActive(
+    @Param('userId') userId: string,
+    @Body() dto: ChangeUserActiveDto,
+  ) {
+    console.log('changeUserActive', userId, dto);
+    return this.usersService.changeUserActive(userId, dto.isActive);
   }
 }

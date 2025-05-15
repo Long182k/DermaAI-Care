@@ -1,37 +1,44 @@
-import { useQuery } from "@tanstack/react-query";
+import type { EditUserNamesDto, PaymentStats } from "@/api/statistics";
 import { statisticsApi } from "@/api/statistics";
 import { Navbar } from "@/components/Navbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Loader2,
-  Users,
-  UserCheck,
-  FileImage,
-  Calendar,
-  CreditCard,
-  TrendingUp,
-  Clock,
-  Calendar as CalendarIcon,
-  Clock as ClockIcon,
-} from "lucide-react";
-import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { useAppStore } from "@/store";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
   ArcElement,
+  BarElement,
+  CategoryScale,
+  Chart as ChartJS,
+  Legend,
+  LinearScale,
+  LineElement,
+  PointElement,
   Title,
   Tooltip,
-  Legend,
 } from "chart.js";
-import { Line, Bar, Pie, Doughnut } from "react-chartjs-2";
-import type { PaymentStats } from "@/api/statistics";
+import {
+  Calendar,
+  CreditCard,
+  FileImage,
+  Loader2,
+  UserCheck,
+  Users,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Bar, Doughnut, Line, Pie } from "react-chartjs-2";
+import { useNavigate } from "react-router-dom";
+import { toast } from "react-toastify";
 
 // Register ChartJS components
 ChartJS.register(
@@ -104,6 +111,77 @@ const AdminDashboard = () => {
   const { userInfo } = useAppStore();
   const navigate = useNavigate();
 
+  // Add state for the edit name modal
+  const [editNameModalOpen, setEditNameModalOpen] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState("");
+  const [editNameForm, setEditNameForm] = useState({
+    firstName: "",
+    lastName: "",
+  });
+
+  // Function to open the edit modal
+  const handleOpenEditModal = (
+    userId: string,
+    firstName: string,
+    lastName: string
+  ) => {
+    setCurrentUserId(userId);
+    setEditNameForm({
+      firstName: firstName || "",
+      lastName: lastName || "",
+    });
+    setEditNameModalOpen(true);
+  };
+
+  // Function to handle form submission
+  const handleEditNameSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (currentUserId && (editNameForm.firstName || editNameForm.lastName)) {
+      editUserNamesMutation.mutate({
+        userId: currentUserId,
+        dto: {
+          firstName: editNameForm.firstName,
+          lastName: editNameForm.lastName,
+        },
+      });
+      setEditNameModalOpen(false);
+    }
+  };
+
+  // Mutation for editing user names
+  const editUserNamesMutation = useMutation({
+    mutationFn: ({ userId, dto }: { userId: string; dto: EditUserNamesDto }) =>
+      statisticsApi.editUserNames(userId, dto),
+    onSuccess: () => {
+      refetchPatients();
+      refetchDoctors();
+      toast.success("User names updated successfully");
+      // Optionally refetch users/statistics here
+    },
+    onError: (error: any) => {
+      toast.error(
+        error?.response?.data?.message || "Failed to update user names"
+      );
+    },
+  });
+
+  // Mutation for changing user active status
+  const changeUserActiveMutation = useMutation({
+    mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
+      statisticsApi.changeUserActive(userId, isActive),
+    onSuccess: () => {
+      toast.success("User active status updated");
+      // Refetch all relevant data
+      refetchPatients();
+      refetchDoctors();
+    },
+    onError: (error: any) => {
+      toast.error(
+        error?.response?.data?.message || "Failed to update user status"
+      );
+    },
+  });
+
   // Redirect if not admin
   useEffect(() => {
     if (userInfo && userInfo.role !== "ADMIN") {
@@ -126,6 +204,7 @@ const AdminDashboard = () => {
     data: patientData,
     isLoading: isLoadingPatients,
     error: patientsError,
+    refetch: refetchPatients,
   } = useQuery({
     queryKey: ["statistics", "patients"],
     queryFn: statisticsApi.getPatients,
@@ -136,6 +215,7 @@ const AdminDashboard = () => {
     data: doctorData,
     isLoading: isLoadingDoctors,
     error: doctorsError,
+    refetch: refetchDoctors,
   } = useQuery({
     queryKey: ["statistics", "doctors"],
     queryFn: statisticsApi.getDoctors,
@@ -646,6 +726,9 @@ const AdminDashboard = () => {
                               <th className="text-right py-3 px-4 font-medium">
                                 Appointments
                               </th>
+                              <th className="text-right py-3 px-4 font-medium">
+                                Actions
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -660,6 +743,49 @@ const AdminDashboard = () => {
                                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                                       {patient.count}
                                     </span>
+                                  </td>
+                                  <td className="text-right py-3 px-4">
+                                    <div className="flex gap-2 justify-end">
+                                      <button
+                                        className="bg-primary text-white px-3 py-1 rounded hover:bg-primary/80 focus:outline-none"
+                                        aria-label="Edit Name"
+                                        onClick={() =>
+                                          handleOpenEditModal(
+                                            patient.id,
+                                            patient.firstName || "",
+                                            patient.lastName || ""
+                                          )
+                                        }
+                                        disabled={
+                                          editUserNamesMutation.isPending
+                                        }
+                                      >
+                                        {editUserNamesMutation.isPending
+                                          ? "Saving..."
+                                          : "Edit Name"}
+                                      </button>
+                                      <button
+                                        className={`${
+                                          patient.isActive
+                                            ? "bg-red-500 hover:bg-red-600"
+                                            : "bg-green-500 hover:bg-green-600"
+                                        } text-white px-3 py-1 rounded focus:outline-none`}
+                                        aria-label="Toggle Active"
+                                        onClick={() => {
+                                          changeUserActiveMutation.mutate({
+                                            userId: patient.id,
+                                            isActive: !patient.isActive,
+                                          });
+                                        }}
+                                        disabled={
+                                          changeUserActiveMutation.isPending
+                                        }
+                                      >
+                                        {patient.isActive
+                                          ? "Deactivate"
+                                          : "Activate"}
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               )
@@ -738,8 +864,15 @@ const AdminDashboard = () => {
                         <table className="w-full">
                           <thead>
                             <tr className="border-b bg-muted/50">
-                              <th className="text-left py-3 px-4 font-medium">Doctor Name</th>
-                              <th className="text-right py-3 px-4 font-medium">Appointments</th>
+                              <th className="text-left py-3 px-4 font-medium">
+                                Doctor Name
+                              </th>
+                              <th className="text-right py-3 px-4 font-medium">
+                                Appointments
+                              </th>
+                              <th className="text-right py-3 px-4 font-medium">
+                                Actions
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -755,6 +888,49 @@ const AdminDashboard = () => {
                                       {doctor.count}
                                     </span>
                                   </td>
+                                  <td className="text-right py-3 px-4">
+                                    <div className="flex gap-2 justify-end">
+                                      <button
+                                        className="bg-primary text-white px-3 py-1 rounded hover:bg-primary/80 focus:outline-none"
+                                        aria-label="Edit Name"
+                                        onClick={() =>
+                                          handleOpenEditModal(
+                                            doctor.id,
+                                            doctor.firstName || "",
+                                            doctor.lastName || ""
+                                          )
+                                        }
+                                        disabled={
+                                          editUserNamesMutation.isPending
+                                        }
+                                      >
+                                        {editUserNamesMutation.isPending
+                                          ? "Saving..."
+                                          : "Edit Name"}
+                                      </button>
+                                      <button
+                                        className={`${
+                                          doctor.isActive
+                                            ? "bg-red-500 hover:bg-red-600"
+                                            : "bg-green-500 hover:bg-green-600"
+                                        } text-white px-3 py-1 rounded focus:outline-none`}
+                                        aria-label="Toggle Active"
+                                        onClick={() => {
+                                          changeUserActiveMutation.mutate({
+                                            userId: doctor.id,
+                                            isActive: !doctor.isActive,
+                                          });
+                                        }}
+                                        disabled={
+                                          changeUserActiveMutation.isPending
+                                        }
+                                      >
+                                        {doctor.isActive
+                                          ? "Deactivate"
+                                          : "Activate"}
+                                      </button>
+                                    </div>
+                                  </td>
                                 </tr>
                               )
                             )}
@@ -763,7 +939,9 @@ const AdminDashboard = () => {
                       </div>
                     ) : (
                       <div className="flex items-center justify-center h-full">
-                        <p className="text-muted-foreground">No data available</p>
+                        <p className="text-muted-foreground">
+                          No data available
+                        </p>
                       </div>
                     )}
                   </div>
@@ -785,19 +963,24 @@ const AdminDashboard = () => {
                       <Doughnut
                         options={doughnutOptions}
                         data={{
-                          labels: predictionData.charts.lesionDistribution.map((item) => item.name),
+                          labels: predictionData.charts.lesionDistribution.map(
+                            (item) => item.name
+                          ),
                           datasets: [
                             {
-                              data: predictionData.charts.lesionDistribution.map((item) => item.count),
+                              data: predictionData.charts.lesionDistribution.map(
+                                (item) => item.count
+                              ),
                               backgroundColor: [
-                                "#f87171", 
-                                "#60a5fa", 
-                                "#fbbf24", 
+                                "#f87171",
+                                "#60a5fa",
+                                "#fbbf24",
                                 "#34d399",
                                 "#a78bfa",
                                 "#f472b6",
-                                "#38bdf8", 
-                                "#facc15",                               ],
+                                "#38bdf8",
+                                "#facc15",
+                              ],
                             },
                           ],
                         }}
@@ -837,44 +1020,64 @@ const AdminDashboard = () => {
                       <table className="w-full">
                         <thead>
                           <tr className="border-b">
-                            <th className="text-left py-3 px-4 font-semibold">Class</th>
-                            <th className="text-left py-3 px-4 font-semibold">Name</th>
-                            <th className="text-left py-3 px-4 font-semibold">Cancer Status</th>
-                            <th className="text-right py-3 px-4 font-semibold">Count</th>
-                            <th className="text-right py-3 px-4 font-semibold">Percent</th>
+                            <th className="text-left py-3 px-4 font-semibold">
+                              Class
+                            </th>
+                            <th className="text-left py-3 px-4 font-semibold">
+                              Name
+                            </th>
+                            <th className="text-left py-3 px-4 font-semibold">
+                              Cancer Status
+                            </th>
+                            <th className="text-right py-3 px-4 font-semibold">
+                              Count
+                            </th>
+                            <th className="text-right py-3 px-4 font-semibold">
+                              Percent
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
-                          {predictionData.summary.lesionDistribution.map((item, index) => (
-                            <tr
-                              key={index}
-                              className="border-b hover:bg-muted/50 transition-colors"
-                            >
-                              <td className="py-3 px-4 font-mono">{item.class}</td>
-                              <td className="py-3 px-4">{item.name}</td>
-                              <td className="py-3 px-4">
-                                {item.isCancerous === true && (
-                                  <span className="text-red-600 font-semibold ml-2">Cancerous</span>
-                                )}
-                                {item.isCancerous === false && (
-                                  <span className="text-green-600 font-semibold ml-2">Non-cancerous</span>
-                                )}
-                                {item.isCancerous === null && (
-                                  <span className="text-gray-500 font-semibold ml-2">Unknown</span>
-                                )}
-                              </td>
-                              <td className="text-right py-3 px-4">
-                                <span className="inline-flex items-center justify-center bg-primary/10 text-primary rounded-full px-2.5 py-0.5 text-sm font-medium">
-                                  {item.count}
-                                </span>
-                              </td>
-                              <td className="text-right py-3 px-4">
-                                <span className="inline-flex items-center justify-center bg-primary/10 text-primary rounded-full px-2.5 py-0.5 text-sm font-medium">
-                                  {item.percent}%
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
+                          {predictionData.summary.lesionDistribution.map(
+                            (item, index) => (
+                              <tr
+                                key={index}
+                                className="border-b hover:bg-muted/50 transition-colors"
+                              >
+                                <td className="py-3 px-4 font-mono">
+                                  {item.class}
+                                </td>
+                                <td className="py-3 px-4">{item.name}</td>
+                                <td className="py-3 px-4">
+                                  {item.isCancerous === true && (
+                                    <span className="text-red-600 font-semibold ml-2">
+                                      Cancerous
+                                    </span>
+                                  )}
+                                  {item.isCancerous === false && (
+                                    <span className="text-green-600 font-semibold ml-2">
+                                      Non-cancerous
+                                    </span>
+                                  )}
+                                  {item.isCancerous === null && (
+                                    <span className="text-gray-500 font-semibold ml-2">
+                                      Unknown
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="text-right py-3 px-4">
+                                  <span className="inline-flex items-center justify-center bg-primary/10 text-primary rounded-full px-2.5 py-0.5 text-sm font-medium">
+                                    {item.count}
+                                  </span>
+                                </td>
+                                <td className="text-right py-3 px-4">
+                                  <span className="inline-flex items-center justify-center bg-primary/10 text-primary rounded-full px-2.5 py-0.5 text-sm font-medium">
+                                    {item.percent}%
+                                  </span>
+                                </td>
+                              </tr>
+                            )
+                          )}
                         </tbody>
                       </table>
                     ) : (
@@ -934,7 +1137,10 @@ const AdminDashboard = () => {
                 <CardContent>
                   <div className="h-[300px] flex items-center justify-center">
                     {appointmentsByDayData ? (
-                      <Bar options={barChartOptions} data={appointmentsByDayData} />
+                      <Bar
+                        options={barChartOptions}
+                        data={appointmentsByDayData}
+                      />
                     ) : (
                       <p className="text-muted-foreground text-center py-8">
                         No data available
@@ -959,39 +1165,68 @@ const AdminDashboard = () => {
                       <div className="mb-4">
                         <div className="flex flex-wrap gap-4">
                           <div className="flex flex-col items-center">
-                            <span className="text-lg font-semibold">Total Payments</span>
-                            <span className="text-2xl font-bold">{paymentData?.summary.totalPayments ?? 0}</span>
+                            <span className="text-lg font-semibold">
+                              Total Payments
+                            </span>
+                            <span className="text-2xl font-bold">
+                              {paymentData?.summary.totalPayments ?? 0}
+                            </span>
                           </div>
                           <div className="flex flex-col items-center">
-                            <span className="text-lg font-semibold">Completed</span>
-                            <span className="text-2xl font-bold text-green-600">{paymentData?.summary.completedPayments ?? 0}</span>
+                            <span className="text-lg font-semibold">
+                              Completed
+                            </span>
+                            <span className="text-2xl font-bold text-green-600">
+                              {paymentData?.summary.completedPayments ?? 0}
+                            </span>
                           </div>
                           <div className="flex flex-col items-center">
-                            <span className="text-lg font-semibold">Pending</span>
-                            <span className="text-2xl font-bold text-yellow-600">{paymentData?.summary.pendingPayments ?? 0}</span>
+                            <span className="text-lg font-semibold">
+                              Pending
+                            </span>
+                            <span className="text-2xl font-bold text-yellow-600">
+                              {paymentData?.summary.pendingPayments ?? 0}
+                            </span>
                           </div>
                           <div className="flex flex-col items-center">
-                            <span className="text-lg font-semibold">Total Completed Amount</span>
-                            <span className="text-2xl font-bold text-primary">${paymentData?.summary.totalAmountCompleted?.toFixed(2) ?? '0.00'}</span>
+                            <span className="text-lg font-semibold">
+                              Total Completed Amount
+                            </span>
+                            <span className="text-2xl font-bold text-primary">
+                              $
+                              {paymentData?.summary.totalAmountCompleted?.toFixed(
+                                2
+                              ) ?? "0.00"}
+                            </span>
                           </div>
                         </div>
                       </div>
                       <div className="h-[250px]">
                         {paymentsByDayData ? (
-                          <Bar options={barChartOptions} data={paymentsByDayData} />
+                          <Bar
+                            options={barChartOptions}
+                            data={paymentsByDayData}
+                          />
                         ) : (
                           <div className="flex items-center justify-center h-full">
-                            <p className="text-muted-foreground">No data available</p>
+                            <p className="text-muted-foreground">
+                              No data available
+                            </p>
                           </div>
                         )}
                       </div>
                     </div>
                     <div className="h-[300px]">
                       {monthlyPaymentsData ? (
-                        <Bar options={barChartOptions} data={monthlyPaymentsData} />
+                        <Bar
+                          options={barChartOptions}
+                          data={monthlyPaymentsData}
+                        />
                       ) : (
                         <div className="flex items-center justify-center h-full">
-                          <p className="text-muted-foreground">No data available</p>
+                          <p className="text-muted-foreground">
+                            No data available
+                          </p>
                         </div>
                       )}
                     </div>
@@ -1002,6 +1237,61 @@ const AdminDashboard = () => {
           </TabsContent>
         </Tabs>
       </main>
+      <Dialog open={editNameModalOpen} onOpenChange={setEditNameModalOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit User Name</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleEditNameSubmit}>
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="firstName" className="text-right">
+                  First Name
+                </Label>
+                <Input
+                  id="firstName"
+                  value={editNameForm.firstName}
+                  onChange={(e) =>
+                    setEditNameForm({
+                      ...editNameForm,
+                      firstName: e.target.value,
+                    })
+                  }
+                  className="col-span-3"
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="lastName" className="text-right">
+                  Last Name
+                </Label>
+                <Input
+                  id="lastName"
+                  value={editNameForm.lastName}
+                  onChange={(e) =>
+                    setEditNameForm({
+                      ...editNameForm,
+                      lastName: e.target.value,
+                    })
+                  }
+                  className="col-span-3"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditNameModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={editUserNamesMutation.isPending}>
+                {editUserNamesMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

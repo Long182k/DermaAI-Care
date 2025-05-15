@@ -52,7 +52,7 @@ export const LoginForm = ({ onToggle }: LoginFormProps) => {
 
       // Navigate based on role
       if (res.role === "ADMIN") {
-        navigate("/dashboard");
+        navigate("/admin-dashboard");
       } else {
         navigate("/");
       }
@@ -85,7 +85,8 @@ export const LoginForm = ({ onToggle }: LoginFormProps) => {
       setForgotEmail("");
     },
     onError: (error: AxiosError<ErrorResponseData>) => {
-      const message = error.response?.data?.message || "Failed to send reset instructions";
+      const message =
+        error.response?.data?.message || "Failed to send reset instructions";
       toast({
         title: "Reset request failed",
         description: message,
@@ -149,9 +150,9 @@ export const LoginForm = ({ onToggle }: LoginFormProps) => {
             />
           </div>
 
-          <Button 
-            type="button" 
-            variant="link" 
+          <Button
+            type="button"
+            variant="link"
             className="px-0"
             onClick={() => setShowForgotPasswordModal(true)}
           >
@@ -169,7 +170,9 @@ export const LoginForm = ({ onToggle }: LoginFormProps) => {
           </div>
 
           <div className="text-center mt-6">
-            <span className="text-muted-foreground">Don't have an account?</span>{" "}
+            <span className="text-muted-foreground">
+              Don't have an account?
+            </span>{" "}
             <Button type="button" variant="link" onClick={onToggle}>
               Sign up
             </Button>
@@ -183,7 +186,8 @@ export const LoginForm = ({ onToggle }: LoginFormProps) => {
           <div className="bg-card p-6 rounded-lg shadow-lg w-full max-w-md">
             <h2 className="text-xl font-semibold mb-4">Reset Password</h2>
             <p className="text-muted-foreground mb-4">
-              Enter your email address and we'll send you instructions to reset your password.
+              Enter your email address and we'll send you instructions to reset
+              your password.
             </p>
             <form onSubmit={handleForgotPassword} className="space-y-4">
               <div className="space-y-2">

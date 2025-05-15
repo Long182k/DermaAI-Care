@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { ScheduleStatus, User } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
@@ -267,5 +268,54 @@ export class AppointmentService {
     }
 
     return appointment;
+  }
+
+  async changeAppointmentStatus(
+    appointmentId: string,
+    status: string,
+    currentUser: User,
+  ): Promise<any> {
+    // Find the appointment
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      include: {
+        Patient: true,
+        Doctor: true,
+      },
+    });
+
+    if (!appointment) {
+      throw new NotFoundException('Appointment not found');
+    }
+
+    // Check permissions (only the admin can change status)
+    const isAdmin = currentUser.role === 'ADMIN';
+
+    if (!isAdmin) {
+      throw new ForbiddenException(
+        'You do not have permission to change this appointment status',
+      );
+    }
+
+    // Additional validation based on roles and status transitions
+    if (status === 'CONFIRMED' && !isAdmin) {
+      throw new ForbiddenException(
+        'Only doctors or admins can confirm appointments',
+      );
+    }
+
+    if (status === 'COMPLETED' && !isAdmin) {
+      throw new ForbiddenException(
+        'Only doctors or admins can mark appointments as completed',
+      );
+    }
+
+    // Update the appointment status
+    const updatedAppointment = await this.prisma.appointment.update({
+      where: { id: appointmentId },
+      data: { status },
+    });
+
+    return updatedAppointment;
   }
 }

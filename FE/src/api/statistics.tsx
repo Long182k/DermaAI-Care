@@ -104,6 +104,15 @@ export interface PaymentStats {
   };
 }
 
+export interface EditUserNamesDto {
+  firstName?: string;
+  lastName?: string;
+}
+
+export interface ChangeUserActiveDto {
+  isActive: boolean;
+}
+
 // API functions
 export const statisticsApi = {
   getOverview: async (): Promise<OverviewStats> => {
@@ -137,4 +146,25 @@ export const statisticsApi = {
     const response = await axiosClient.get(`${API_URL}/statistics/payments`);
     return response.data;
   },
+
+  editUserNames: async (
+    userId: string,
+    dto: EditUserNamesDto
+  ): Promise<any> => {
+    const response = await axiosClient.patch(
+      `${API_URL}/users/admin/edit-names/${userId}`,
+      dto
+    );
+    return response.data;
+  },
+
+  changeUserActive: async (userId: string, isActive: boolean): Promise<any> => {
+    const response = await axiosClient.patch(
+      `${API_URL}/users/admin/change-active/${userId}`,
+      { isActive }
+    );
+    return response.data;
+  },
+
+  
 };

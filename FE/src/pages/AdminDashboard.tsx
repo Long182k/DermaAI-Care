@@ -1,4 +1,8 @@
-import type { EditUserNamesDto, PaymentStats } from "@/api/statistics";
+import type {
+  EditUserNamesDto,
+  PaymentStats,
+  AppointmentStatus,
+} from "@/api/statistics";
 import { statisticsApi } from "@/api/statistics";
 import { Navbar } from "@/components/Navbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -182,6 +186,35 @@ const AdminDashboard = () => {
     },
   });
 
+  // Mutation for changing appointment status
+  const changeAppointmentStatusMutation = useMutation({
+    mutationFn: ({
+      appointmentId,
+      status,
+    }: {
+      appointmentId: string;
+      status: AppointmentStatus;
+    }) => statisticsApi.changeAppointmentStatus(appointmentId, status),
+    onSuccess: () => {
+      toast.success("Appointment status updated");
+      // Refetch appointment data
+      refetchAppointments();
+    },
+    onError: (error: any) => {
+      toast.error(
+        error?.response?.data?.message || "Failed to update appointment status"
+      );
+    },
+  });
+
+  // Function to handle appointment status change
+  const handleChangeAppointmentStatus = (
+    appointmentId: string,
+    status: AppointmentStatus
+  ) => {
+    changeAppointmentStatusMutation.mutate({ appointmentId, status });
+  };
+
   // Redirect if not admin
   useEffect(() => {
     if (userInfo && userInfo.role !== "ADMIN") {
@@ -236,6 +269,7 @@ const AdminDashboard = () => {
     data: appointmentData,
     isLoading: isLoadingAppointments,
     error: appointmentsError,
+    refetch: refetchAppointments,
   } = useQuery({
     queryKey: ["statistics", "appointments"],
     queryFn: statisticsApi.getAppointments,
@@ -1093,60 +1127,170 @@ const AdminDashboard = () => {
 
           {/* Appointments Tab */}
           <TabsContent value="appointments">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card className="shadow-md">
+                  <CardHeader>
+                    <CardTitle>Appointments by Status</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-[300px] flex items-center justify-center">
+                      {appointmentData?.summary.appointmentsByStatus ? (
+                        <Doughnut
+                          options={doughnutOptions}
+                          data={appointmentStatusData}
+                        />
+                      ) : (
+                        <p className="text-muted-foreground">
+                          No data available
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="shadow-md">
+                  <CardHeader>
+                    <CardTitle>Monthly Appointments</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-[300px] flex items-center justify-center">
+                      {appointmentData?.charts?.monthlyAppointments ? (
+                        <Bar
+                          options={barChartOptions}
+                          data={monthlyAppointmentData}
+                        />
+                      ) : (
+                        <p className="text-muted-foreground">
+                          No data available
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="md:col-span-2 shadow-md">
+                  <CardHeader>
+                    <CardTitle>Appointments by Day</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-[300px] flex items-center justify-center">
+                      {appointmentsByDayData ? (
+                        <Bar
+                          options={barChartOptions}
+                          data={appointmentsByDayData}
+                        />
+                      ) : (
+                        <p className="text-muted-foreground text-center py-8">
+                          No data available
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
               <Card className="shadow-md">
                 <CardHeader>
-                  <CardTitle>Appointments by Status</CardTitle>
+                  <CardTitle>Appointments List</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="h-[300px] flex items-center justify-center">
-                    {appointmentData?.summary.appointmentsByStatus ? (
-                      <Doughnut
-                        options={doughnutOptions}
-                        data={appointmentStatusData}
-                      />
-                    ) : (
-                      <p className="text-muted-foreground">No data available</p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+                  {appointmentData?.appointmentsList ? (
+                    <div className="rounded-md border">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b bg-muted/50 font-medium">
+                            <th className="py-3 px-4 text-left">Patient</th>
+                            <th className="py-3 px-4 text-left">Doctor</th>
+                            <th className="py-3 px-4 text-left">Date</th>
+                            <th className="py-3 px-4 text-left">Time</th>
+                            <th className="py-3 px-4 text-left">Status</th>
+                            <th className="py-3 px-4 text-left">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {appointmentData.appointmentsList.map(
+                            (appointment) => {
+                              const scheduleDate = new Date(
+                                appointment.startTime
+                              );
+                              const formattedDate =
+                                scheduleDate.toLocaleDateString();
+                              const formattedTime =
+                                scheduleDate.toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                });
 
-              <Card className="shadow-md">
-                <CardHeader>
-                  <CardTitle>Monthly Appointments</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-[300px] flex items-center justify-center">
-                    {appointmentData?.charts?.monthlyAppointments ? (
-                      <Bar
-                        options={barChartOptions}
-                        data={monthlyAppointmentData}
-                      />
-                    ) : (
-                      <p className="text-muted-foreground">No data available</p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="md:col-span-2 shadow-md">
-                <CardHeader>
-                  <CardTitle>Appointments by Day</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-[300px] flex items-center justify-center">
-                    {appointmentsByDayData ? (
-                      <Bar
-                        options={barChartOptions}
-                        data={appointmentsByDayData}
-                      />
-                    ) : (
-                      <p className="text-muted-foreground text-center py-8">
-                        No data available
-                      </p>
-                    )}
-                  </div>
+                              return (
+                                <tr key={appointment.id} className="border-b">
+                                  <td className="py-3 px-4">
+                                    {appointment.patientName}
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    {appointment.doctorName}
+                                  </td>
+                                  <td className="py-3 px-4">{formattedDate}</td>
+                                  <td className="py-3 px-4">{formattedTime}</td>
+                                  <td className="py-3 px-4">
+                                    <span
+                                      className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                        appointment.status === "SCHEDULED"
+                                          ? "bg-yellow-100 text-yellow-800"
+                                          : appointment.status === "CONFIRMED"
+                                          ? "bg-green-100 text-green-800"
+                                          : appointment.status === "CANCELLED"
+                                          ? "bg-red-100 text-red-800"
+                                          : appointment.status === "COMPLETED"
+                                          ? "bg-blue-100 text-blue-800"
+                                          : "bg-gray-100 text-gray-800"
+                                      }`}
+                                    >
+                                      {appointment.status}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    {appointment.status === "SCHEDULED" && (
+                                      <div className="flex space-x-2">
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() =>
+                                            handleChangeAppointmentStatus(
+                                              appointment.id,
+                                              "CONFIRMED"
+                                            )
+                                          }
+                                        >
+                                          Confirm
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className="text-red-500 hover:text-red-700"
+                                          onClick={() =>
+                                            handleChangeAppointmentStatus(
+                                              appointment.id,
+                                              "CANCELLED"
+                                            )
+                                          }
+                                        >
+                                          Cancel
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            }
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-center py-8">
+                      No appointments available
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             </div>

@@ -76,6 +76,15 @@ export interface AppointmentStats {
     };
     appointmentsByDay: any;
     appointmentsByTime: any;
+    appointmentsList: {
+      id: string;
+      patientName: string;
+      doctorName: string;
+      status: string;
+      notes: string;
+      startTime: string;
+      endTime: string;
+    }[];
   };
 }
 
@@ -111,6 +120,13 @@ export interface EditUserNamesDto {
 
 export interface ChangeUserActiveDto {
   isActive: boolean;
+}
+
+export enum AppointmentStatus {
+  PENDING = "PENDING",
+  BOOKED = "BOOKED",
+  CANCELLED = "CANCELLED",
+  CONFIRMED = "CONFIRMED",
 }
 
 // API functions
@@ -165,6 +181,19 @@ export const statisticsApi = {
     );
     return response.data;
   },
-
-  
+  changeAppointmentStatus: async (
+    appointmentId: string,
+    status: AppointmentStatus
+  ): Promise<any> => {
+    try {
+      const response = await axiosClient.patch(
+        `/appointments/${appointmentId}/status`,
+        { status }
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error changing appointment status:", error);
+      throw error;
+    }
+  },
 };

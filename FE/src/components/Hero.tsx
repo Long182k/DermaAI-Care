@@ -12,7 +12,7 @@ export const Hero = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           <div className="space-y-6 text-center lg:text-left">
             <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tighter">
-              AI-Powered Skin Disease Detection & Expert Care
+              AI-Powered Skin Cancer Detection & Expert Care
             </h1>
             <p className="text-lg text-muted-foreground md:text-xl">
               Get instant AI analysis of skin conditions and connect with

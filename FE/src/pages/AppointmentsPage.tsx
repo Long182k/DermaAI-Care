@@ -418,8 +418,8 @@ const AppointmentsPage = () => {
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            // Handle view patient details
-                            navigate(`/patient/${appointment.Patient.id}`);
+                            // Navigate to prediction history with patient ID
+                            navigate(`/prediction-history/${appointment.Patient.id}`);
                           }}
                         >
                           View Patient Details

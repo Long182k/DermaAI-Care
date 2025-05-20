@@ -123,6 +123,10 @@ const App = () => {
                   path="/prediction-history"
                   element={<PredictionHistoryPage />}
                 />
+                <Route
+                  path="/prediction-history/:patientId"
+                  element={<PredictionHistoryPage />}
+                />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </StreamChatComponent>

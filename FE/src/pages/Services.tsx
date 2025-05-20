@@ -20,7 +20,7 @@ const services = [
   },
   {
     icon: MessageSquare,
-    title: "Secure Chat",
+    title: "Real-time Communication",
     description:
       "Communicate directly with healthcare providers through our secure platform",
     route: "/chat",

@@ -59,11 +59,27 @@ const Doctors = () => {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.6, delay: index * 0.2 }}
                 >
-                  <img
-                    src={doctor.avatarUrl || "/placeholder.svg"}
-                    alt={`${doctor.firstName || ""} ${doctor.lastName || ""}`}
-                    className="w-full h-48 object-cover"
-                  />
+                  <div className="w-full h-64 overflow-hidden relative bg-gradient-to-br from-blue-50 to-indigo-50">
+                    <div className="absolute inset-0 opacity-20">
+                      <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                          <pattern id={`dots-${doctor.id}`} patternUnits="userSpaceOnUse" width="20" height="20">
+                            <circle cx="10" cy="10" r="1.5" fill="#6366F1" />
+                          </pattern>
+                        </defs>
+                        <rect width="100%" height="100%" fill={`url(#dots-${doctor.id})`} />
+                      </svg>
+                    </div>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-4/5 h-4/5 flex items-center justify-center">
+                        <img
+                          src={doctor.avatarUrl || "/placeholder.svg"}
+                          alt={`${doctor.firstName || ""} ${doctor.lastName || ""}`}
+                          className="max-w-full max-h-full object-cover object-center"
+                        />
+                      </div>
+                    </div>
+                  </div>
                   <div className="p-6">
                     <h3 className="text-xl font-semibold mb-2">
                       {doctor.firstName && doctor.lastName
@@ -77,17 +93,6 @@ const Doctors = () => {
                         : "Experience not specified"}
                     </p>
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center">
-                        <span className="text-yellow-400">★</span>
-                        <span className="ml-1 font-semibold">
-                          {/* Placeholder for rating */}
-                          4.8
-                        </span>
-                        <span className="text-muted-foreground ml-1">
-                          {/* Placeholder for reviews */}
-                          (96 reviews)
-                        </span>
-                      </div>
                       <button
                         className="text-primary hover:underline"
                         onClick={(e) => {

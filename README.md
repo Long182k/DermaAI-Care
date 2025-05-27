@@ -77,10 +77,14 @@ i. **Frontend:**
 ```bash
 pnpm dev
 ```
-ii. **Backend:** 1. `bash
+ii. **Backend:** 
+
+1. `bash
            npx prisma generate 
            `
-(This command will read your `schema.prisma` file and generate the Prisma Client, providing type-safe database access and queries) 2. `bash
+(This command will read your `schema.prisma` file and generate the Prisma Client, providing type-safe database access and queries) 
+
+2. `bash
            pnpm start:dev
            `
 

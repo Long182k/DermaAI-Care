@@ -1,28 +1,27 @@
-import React, { useState, useEffect } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent } from "@/components/ui/card";
+import { Appointment, appointmentApi } from "@/api/appointment";
+import { Navbar } from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
-import { Calendar as CalendarIcon, Loader2 } from "lucide-react";
-import { appointmentApi, Appointment } from "@/api/appointment";
-import {
-  format,
-  isToday,
-  isThisWeek,
-  isThisMonth,
-  isFuture,
-  parseISO,
-} from "date-fns";
-import { useNavigate } from "react-router-dom";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Navbar } from "@/components/Navbar";
 import { useAppStore } from "@/store";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  format,
+  isFuture,
+  isThisMonth,
+  isThisWeek,
+  isToday
+} from "date-fns";
+import { Calendar as CalendarIcon, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 // Define filter types
 type FilterType = "day" | "week" | "month" | "all";
@@ -273,7 +272,6 @@ const AppointmentsPage = () => {
         </div>
 
         {isDoctor ? (
-          // Doctor view - only show All Patient Appointments tab
           <div className="mb-6">
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-medium">All Patient Appointments</h2>
@@ -419,28 +417,12 @@ const AppointmentsPage = () => {
                           size="sm"
                           onClick={() => {
                             // Navigate to prediction history with patient ID
-                            navigate(`/prediction-history/${appointment.Patient.id}`);
+                            navigate(
+                              `/prediction-history/${appointment.Patient.id}`
+                            );
                           }}
                         >
                           View Patient Details
-                        </Button>
-                        <Button
-                          variant={
-                            appointment.status === "CONFIRMED"
-                              ? "outline"
-                              : "default"
-                          }
-                          size="sm"
-                          onClick={() => {
-                            // Handle confirm appointment
-                            // This would need a mutation to update appointment status
-                            console.log("Confirm appointment", appointment.id);
-                          }}
-                          disabled={appointment.status === "CONFIRMED"}
-                        >
-                          {appointment.status === "CONFIRMED"
-                            ? "Confirmed"
-                            : "Confirm Appointment"}
                         </Button>
                       </div>
                     </CardContent>
@@ -453,7 +435,6 @@ const AppointmentsPage = () => {
           // Patient view - show regular tabs content
           <Tabs value={activeTab} className="w-full">
             <TabsContent value="upcoming" className="space-y-4">
-              {/* ... existing code ... */}
               {upcomingAppointments.length === 0 ? (
                 <Card>
                   <CardContent className="py-10 text-center">

@@ -45,7 +45,6 @@ export const AIAnalysis = () => {
   const [analysisResult, setAnalysisResult] =
     useState<DetectionResponse | null>(null);
 
-  // Use React Query's useMutation for the API call
   const { mutate, isPending } = useMutation({
     mutationFn: analyzeImage,
     onSuccess: (data) => {
@@ -311,7 +310,9 @@ export const AIAnalysis = () => {
                         </Accordion>
                       ) : (
                         <p className="text-muted-foreground">
-                          No lesions detected
+                          No lesions detected. However, for your peace of mind,
+                          we recommend calling doctor or booking an appointment
+                          for a professional consultation.
                         </p>
                       )}
                     </div>

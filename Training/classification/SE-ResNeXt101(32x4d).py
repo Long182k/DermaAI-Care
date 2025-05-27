@@ -52,10 +52,6 @@ os.makedirs(output_dir, exist_ok=True)
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    # transforms.RandomHorizontalFlip(),
-    # transforms.RandomVerticalFlip(),
-    # transforms.RandomRotation(20),
-    # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
 ])
 
 # Load dataset
@@ -505,3 +501,4 @@ print(f"  F1 Score: {test_report_ensemble['weighted avg']['f1-score'] * 100:.2f}
 print(f"  AUC: {test_auc_ensemble:.4f}")
 print("  Confusion Matrix:\n", test_conf_matrix_ensemble)
 print("  ROC AUC:\n", test_roc_auc_ensemble)
+

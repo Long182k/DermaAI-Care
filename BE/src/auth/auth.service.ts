@@ -56,6 +56,14 @@ export class AuthService {
   }
 
   async login(user: any) {
+    const userCondition = await this.prisma.user.findUnique({
+      where: { email: user.email },
+    });
+
+    if (userCondition && userCondition.isActive === false) {
+      throw new UnauthorizedException('User is not active');
+    }
+
     const { accessToken, refreshToken } = await this.generateTokens(user);
     const hashedRefreshToke = await argon.hash(refreshToken);
     const payloadUpdate: UpdateHashedRefreshTokenDTO = {

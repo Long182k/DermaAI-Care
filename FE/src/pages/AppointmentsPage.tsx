@@ -4,7 +4,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Calendar as CalendarIcon, Loader2 } from "lucide-react";
 import { appointmentApi, Appointment } from "@/api/appointment";
-import { format, isToday, isThisWeek, isThisMonth } from "date-fns";
+import {
+  format,
+  isToday,
+  isThisWeek,
+  isThisMonth,
+  isFuture,
+  parseISO,
+} from "date-fns";
 import { useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
@@ -15,6 +22,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Navbar } from "@/components/Navbar";
+import { useAppStore } from "@/store";
 
 // Define filter types
 type FilterType = "day" | "week" | "month" | "all";
@@ -27,6 +35,15 @@ const AppointmentsPage = () => {
   const [filter, setFilter] = useState<FilterType>("all");
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { userInfo } = useAppStore();
+  const isDoctor = userInfo?.role === "DOCTOR";
+
+  // Set default active tab based on role
+  useEffect(() => {
+    if (isDoctor) {
+      setActiveTab("doctor-appointments");
+    }
+  }, [isDoctor]);
 
   const navigate = useNavigate();
 
@@ -74,6 +91,13 @@ const AppointmentsPage = () => {
   const filterAppointmentsByDate = (appointments: Appointment[]) => {
     return appointments.filter((appointment) => {
       const appointmentDate = new Date(appointment.Schedule.startTime);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Only include future appointments
+      if (!isFuture(appointmentDate) && !isToday(appointmentDate)) {
+        return false;
+      }
 
       switch (filter) {
         case "day":
@@ -88,6 +112,7 @@ const AppointmentsPage = () => {
       }
     });
   };
+
   // Filter appointments based on status
   const upcomingAppointments = filterAppointmentsByDate(
     appointments.filter(
@@ -102,6 +127,20 @@ const AppointmentsPage = () => {
         appointment.status === "CONFIRMED" || appointment.status === "CANCELLED"
     )
   );
+
+  // For doctor view - all upcoming appointments with patients
+  const doctorUpcomingAppointments = appointments.filter((appointment) => {
+    const appointmentDate = new Date(appointment.Schedule.startTime);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return (
+      (appointment.status === "SCHEDULED" ||
+        appointment.status === "PENDING" ||
+        appointment.status === "CONFIRMED") &&
+      (isFuture(appointmentDate) || isToday(appointmentDate))
+    );
+  });
 
   const handleCancel = (id: string) => {
     // Show loading state and disable button during cancellation
@@ -149,6 +188,19 @@ const AppointmentsPage = () => {
       return `Dr. ${Doctor.lastName}`;
     } else {
       return Doctor.userName;
+    }
+  };
+
+  const getPatientName = (appointment: Appointment) => {
+    const { Patient } = appointment;
+    if (Patient.firstName && Patient.lastName) {
+      return `${Patient.firstName} ${Patient.lastName}`;
+    } else if (Patient.firstName) {
+      return Patient.firstName;
+    } else if (Patient.lastName) {
+      return Patient.lastName;
+    } else {
+      return Patient.userName;
     }
   };
 
@@ -215,26 +267,16 @@ const AppointmentsPage = () => {
               />
             </svg>
           </Button>
-          <h1 className="text-3xl font-bold">My Appointments</h1>
+          <h1 className="text-3xl font-bold">
+            {isDoctor ? "Appointments Management" : "My Appointments"}
+          </h1>
         </div>
 
-        <div className="mb-6">
-          <Tabs value={activeTab} className="w-full">
+        {isDoctor ? (
+          // Doctor view - only show All Patient Appointments tab
+          <div className="mb-6">
             <div className="flex justify-between items-center">
-              <TabsList className="grid w-[calc(100%-120px)] grid-cols-2">
-                <TabsTrigger
-                  value="upcoming"
-                  onClick={() => setActiveTab("upcoming")}
-                >
-                  Upcoming Appointments
-                </TabsTrigger>
-                <TabsTrigger
-                  value="history"
-                  onClick={() => setActiveTab("history")}
-                >
-                  Appointment History
-                </TabsTrigger>
-              </TabsList>
+              <h2 className="text-xl font-medium">All Patient Appointments</h2>
 
               {/* Filter dropdown */}
               <DropdownMenu>
@@ -259,25 +301,68 @@ const AppointmentsPage = () => {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          </Tabs>
-        </div>
+          </div>
+        ) : (
+          // Patient view - show regular tabs
+          <div className="mb-6">
+            <Tabs value={activeTab} className="w-full">
+              <div className="flex justify-between items-center">
+                <TabsList className="w-[calc(100%-120px)] grid grid-cols-2">
+                  <TabsTrigger
+                    value="upcoming"
+                    onClick={() => setActiveTab("upcoming")}
+                  >
+                    Upcoming Appointments
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="history"
+                    onClick={() => setActiveTab("history")}
+                  >
+                    Appointment History
+                  </TabsTrigger>
+                </TabsList>
 
-        <Tabs value={activeTab} className="w-full">
-          <TabsContent value="upcoming" className="space-y-4">
-            {upcomingAppointments.length === 0 ? (
+                {/* Filter dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-[120px]">
+                      {getFilterLabel()}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setFilter("day")}>
+                      Day View
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilter("week")}>
+                      Week View
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilter("month")}>
+                      Month View
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilter("all")}>
+                      All Schedules
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </Tabs>
+          </div>
+        )}
+
+        {isDoctor ? (
+          // Doctor view - only show patient appointments content
+          <div className="space-y-4">
+            {doctorUpcomingAppointments.length === 0 ? (
               <Card>
                 <CardContent className="py-10 text-center">
                   <p className="text-muted-foreground">
-                    You have no upcoming appointments
+                    You have no upcoming appointments with patients
                     {filter !== "all" ? ` for this ${filter}` : ""}.
                   </p>
-                  <Button className="mt-4" onClick={() => navigate("/doctors")}>
-                    Book Appointment
-                  </Button>
                 </CardContent>
               </Card>
             ) : (
-              upcomingAppointments.map((appointment) => (
+              doctorUpcomingAppointments.map((appointment) => (
                 <Card key={appointment.id} className="overflow-hidden">
                   <div className="flex flex-col md:flex-row">
                     <div className="bg-primary/10 p-6 flex flex-col justify-center items-center md:w-1/4">
@@ -294,11 +379,21 @@ const AppointmentsPage = () => {
                       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
                         <div>
                           <h3 className="text-xl font-semibold">
-                            {getDoctorName(appointment)}
+                            {getPatientName(appointment)}
                           </h3>
                           <p className="text-muted-foreground">
-                            {appointment.Doctor.education || "Specialist"}
+                            Gender: {appointment.Patient.gender}
                           </p>
+                          {appointment.Patient.phoneNumber && (
+                            <p className="text-muted-foreground">
+                              Phone: {appointment.Patient.phoneNumber}
+                            </p>
+                          )}
+                          {appointment.Patient.email && (
+                            <p className="text-muted-foreground">
+                              Email: {appointment.Patient.email}
+                            </p>
+                          )}
                         </div>
                         <span
                           className={`px-3 py-1 rounded-full text-xs font-medium mt-2 md:mt-0 ${getStatusColor(
@@ -308,34 +403,44 @@ const AppointmentsPage = () => {
                           {appointment.status}
                         </span>
                       </div>
+
+                      {appointment.notes && (
+                        <div className="mt-2 mb-4">
+                          <p className="font-medium">Patient Notes:</p>
+                          <p className="text-muted-foreground">
+                            {appointment.notes}
+                          </p>
+                        </div>
+                      )}
 
                       <div className="flex flex-wrap gap-2 mt-4">
                         <Button
-                          variant="destructive"
+                          variant="outline"
                           size="sm"
-                          onClick={() => handleCancel(appointment.id)}
-                          disabled={
-                            cancelAppointmentMutation.isPending &&
-                            cancelAppointmentMutation.variables ===
-                              appointment.id
-                          }
+                          onClick={() => {
+                            // Navigate to prediction history with patient ID
+                            navigate(`/prediction-history/${appointment.Patient.id}`);
+                          }}
                         >
-                          {cancelAppointmentMutation.isPending &&
-                          cancelAppointmentMutation.variables ===
-                            appointment.id ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Cancelling...
-                            </>
-                          ) : (
-                            "Cancel"
-                          )}
+                          View Patient Details
                         </Button>
                         <Button
+                          variant={
+                            appointment.status === "CONFIRMED"
+                              ? "outline"
+                              : "default"
+                          }
                           size="sm"
-                          onClick={() => handlePayment(appointment.id)}
+                          onClick={() => {
+                            // Handle confirm appointment
+                            // This would need a mutation to update appointment status
+                            console.log("Confirm appointment", appointment.id);
+                          }}
+                          disabled={appointment.status === "CONFIRMED"}
                         >
-                          Pay Now
+                          {appointment.status === "CONFIRMED"
+                            ? "Confirmed"
+                            : "Confirm Appointment"}
                         </Button>
                       </div>
                     </CardContent>
@@ -343,68 +448,157 @@ const AppointmentsPage = () => {
                 </Card>
               ))
             )}
-          </TabsContent>
-
-          <TabsContent value="history" className="space-y-4">
-            {pastAppointments.length === 0 ? (
-              <Card>
-                <CardContent className="py-10 text-center">
-                  <p className="text-muted-foreground">
-                    You have no appointment history
-                    {filter !== "all" ? ` for this ${filter}` : ""}.
-                  </p>
-                </CardContent>
-              </Card>
-            ) : (
-              pastAppointments.map((appointment) => (
-                <Card key={appointment.id} className="overflow-hidden">
-                  <div className="flex flex-col md:flex-row">
-                    <div className="bg-secondary/10 p-6 flex flex-col justify-center items-center md:w-1/4">
-                      <CalendarIcon className="h-8 w-8 text-secondary mb-2" />
-                      <p className="text-lg font-medium">
-                        {formatDate(appointment.Schedule.startTime)}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {formatTime(appointment.Schedule.startTime)}
-                      </p>
-                    </div>
-
-                    <CardContent className="flex-1 p-6">
-                      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
-                        <div>
-                          <h3 className="text-xl font-semibold">
-                            {getDoctorName(appointment)}
-                          </h3>
-                          <p className="text-muted-foreground">
-                            {appointment.Doctor.education || "Specialist"}
-                          </p>
-                        </div>
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs font-medium mt-2 md:mt-0 ${getStatusColor(
-                            appointment.status
-                          )}`}
-                        >
-                          {appointment.status}
-                        </span>
+          </div>
+        ) : (
+          // Patient view - show regular tabs content
+          <Tabs value={activeTab} className="w-full">
+            <TabsContent value="upcoming" className="space-y-4">
+              {/* ... existing code ... */}
+              {upcomingAppointments.length === 0 ? (
+                <Card>
+                  <CardContent className="py-10 text-center">
+                    <p className="text-muted-foreground">
+                      You have no upcoming appointments
+                      {filter !== "all" ? ` for this ${filter}` : ""}.
+                    </p>
+                    <Button
+                      className="mt-4"
+                      onClick={() => navigate("/doctors")}
+                    >
+                      Book Appointment
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                upcomingAppointments.map((appointment) => (
+                  <Card key={appointment.id} className="overflow-hidden">
+                    <div className="flex flex-col md:flex-row">
+                      <div className="bg-primary/10 p-6 flex flex-col justify-center items-center md:w-1/4">
+                        <CalendarIcon className="h-8 w-8 text-primary mb-2" />
+                        <p className="text-lg font-medium">
+                          {formatDate(appointment.Schedule.startTime)}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatTime(appointment.Schedule.startTime)}
+                        </p>
                       </div>
 
-                      {appointment.status === "COMPLETED" && (
+                      <CardContent className="flex-1 p-6">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
+                          <div>
+                            <h3 className="text-xl font-semibold">
+                              {getDoctorName(appointment)}
+                            </h3>
+                            <p className="text-muted-foreground">
+                              {appointment.Doctor.education || "Specialist"}
+                            </p>
+                          </div>
+                          <span
+                            className={`px-3 py-1 rounded-full text-xs font-medium mt-2 md:mt-0 ${getStatusColor(
+                              appointment.status
+                            )}`}
+                          >
+                            {appointment.status}
+                          </span>
+                        </div>
+
                         <div className="flex flex-wrap gap-2 mt-4">
-                          <Button variant="outline" size="sm">
-                            View Details
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleCancel(appointment.id)}
+                            disabled={
+                              cancelAppointmentMutation.isPending &&
+                              cancelAppointmentMutation.variables ===
+                                appointment.id
+                            }
+                          >
+                            {cancelAppointmentMutation.isPending &&
+                            cancelAppointmentMutation.variables ===
+                              appointment.id ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Cancelling...
+                              </>
+                            ) : (
+                              "Cancel"
+                            )}
                           </Button>
-                          <Button variant="outline" size="sm">
-                            Book Again
+                          <Button
+                            size="sm"
+                            onClick={() => handlePayment(appointment.id)}
+                          >
+                            Pay Now
                           </Button>
                         </div>
-                      )}
-                    </CardContent>
-                  </div>
+                      </CardContent>
+                    </div>
+                  </Card>
+                ))
+              )}
+            </TabsContent>
+
+            <TabsContent value="history" className="space-y-4">
+              {pastAppointments.length === 0 ? (
+                <Card>
+                  <CardContent className="py-10 text-center">
+                    <p className="text-muted-foreground">
+                      You have no appointment history
+                      {filter !== "all" ? ` for this ${filter}` : ""}.
+                    </p>
+                  </CardContent>
                 </Card>
-              ))
-            )}
-          </TabsContent>
-        </Tabs>
+              ) : (
+                pastAppointments.map((appointment) => (
+                  <Card key={appointment.id} className="overflow-hidden">
+                    <div className="flex flex-col md:flex-row">
+                      <div className="bg-secondary/10 p-6 flex flex-col justify-center items-center md:w-1/4">
+                        <CalendarIcon className="h-8 w-8 text-secondary mb-2" />
+                        <p className="text-lg font-medium">
+                          {formatDate(appointment.Schedule.startTime)}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatTime(appointment.Schedule.startTime)}
+                        </p>
+                      </div>
+
+                      <CardContent className="flex-1 p-6">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
+                          <div>
+                            <h3 className="text-xl font-semibold">
+                              {getDoctorName(appointment)}
+                            </h3>
+                            <p className="text-muted-foreground">
+                              {appointment.Doctor.education || "Specialist"}
+                            </p>
+                          </div>
+                          <span
+                            className={`px-3 py-1 rounded-full text-xs font-medium mt-2 md:mt-0 ${getStatusColor(
+                              appointment.status
+                            )}`}
+                          >
+                            {appointment.status}
+                          </span>
+                        </div>
+
+                        {appointment.status === "COMPLETED" && (
+                          <div className="flex flex-wrap gap-2 mt-4">
+                            <Button variant="outline" size="sm">
+                              View Details
+                            </Button>
+                            <Button variant="outline" size="sm">
+                              Book Again
+                            </Button>
+                          </div>
+                        )}
+                      </CardContent>
+                    </div>
+                  </Card>
+                ))
+              )}
+            </TabsContent>
+          </Tabs>
+        )}
       </div>
     </>
   );

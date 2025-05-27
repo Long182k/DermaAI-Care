@@ -15,6 +15,7 @@ import { RolesGuard } from '../auth/@guard/roles.guard';
 import { AppointmentService } from './appointment.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
+import { ChangeAppointmentStatusDto } from './dto/change-appointment-status.dto';
 
 @Controller('appointments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -72,5 +73,18 @@ export class AppointmentController {
     @CurrentUser() currentUser: User,
   ) {
     return await this.appointmentService.cancelAppointment(id, currentUser);
+  }
+
+  @Patch(':id/status')
+  async changeAppointmentStatus(
+    @Param('id') id: string,
+    @Body() changeStatusDto: ChangeAppointmentStatusDto,
+    @CurrentUser() currentUser: User,
+  ) {
+    return await this.appointmentService.changeAppointmentStatus(
+      id,
+      changeStatusDto.status,
+      currentUser,
+    );
   }
 }

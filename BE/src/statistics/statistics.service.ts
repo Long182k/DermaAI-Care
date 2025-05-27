@@ -202,6 +202,7 @@ export class StatisticsService {
         userName: true,
         firstName: true,
         lastName: true,
+        isActive: true,
         _count: {
           select: { PatientAppointments: true },
         },
@@ -220,6 +221,7 @@ export class StatisticsService {
         userName: true,
         firstName: true,
         lastName: true,
+        isActive: true,
         _count: {
           select: { Predictions: true },
         },
@@ -254,10 +256,14 @@ export class StatisticsService {
           data: monthlyData,
         },
         topPatientsByAppointments: patientsWithAppointments.map((p) => ({
+          id: p.id,
+          isActive: p.isActive,
           name: this.formatUserName(p),
           count: p._count.PatientAppointments,
         })),
         topPatientsByPredictions: patientsWithPredictions.map((p) => ({
+          id: p.id,
+          isActive: p.isActive,
           name: this.formatUserName(p),
           count: p._count.Predictions,
         })),
@@ -286,6 +292,7 @@ export class StatisticsService {
         userName: true,
         firstName: true,
         lastName: true,
+        isActive: true,
         _count: {
           select: { DoctorAppointments: true },
         },
@@ -320,6 +327,8 @@ export class StatisticsService {
       },
       charts: {
         topDoctorsByAppointments: doctorsWithAppointments.map((d) => ({
+          id: d.id,
+          isActive: d.isActive,
           name: this.formatUserName(d),
           count: d._count.DoctorAppointments,
         })),
@@ -575,6 +584,41 @@ export class StatisticsService {
       }
     });
 
+    // Get all appointments with required fields
+    const allAppointments = await this.prisma.appointment.findMany({
+      include: {
+        Patient: {
+          select: {
+            userName: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        Doctor: {
+          select: {
+            userName: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        Schedule: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    // Format the appointments list with required fields
+    const appointmentsList = allAppointments.map((appointment) => ({
+      id: appointment.id,
+      patientName: this.formatUserName(appointment.Patient),
+      doctorName: this.formatUserName(appointment.Doctor),
+      status: appointment.status,
+      notes: appointment.notes,
+      startTime: appointment.Schedule.startTime,
+      endTime: appointment.Schedule.endTime,
+    }));
+
     return {
       summary: {
         totalAppointments,
@@ -619,6 +663,7 @@ export class StatisticsService {
         })),
         appointmentsByDay,
       },
+      appointmentsList, // Added the list of all appointments with required fields
     };
   }
 

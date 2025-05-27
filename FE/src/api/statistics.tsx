@@ -76,6 +76,15 @@ export interface AppointmentStats {
     };
     appointmentsByDay: any;
     appointmentsByTime: any;
+    appointmentsList: {
+      id: string;
+      patientName: string;
+      doctorName: string;
+      status: string;
+      notes: string;
+      startTime: string;
+      endTime: string;
+    }[];
   };
 }
 
@@ -102,6 +111,22 @@ export interface PaymentStats {
       data: number[];
     };
   };
+}
+
+export interface EditUserNamesDto {
+  firstName?: string;
+  lastName?: string;
+}
+
+export interface ChangeUserActiveDto {
+  isActive: boolean;
+}
+
+export enum AppointmentStatus {
+  PENDING = "PENDING",
+  BOOKED = "BOOKED",
+  CANCELLED = "CANCELLED",
+  CONFIRMED = "CONFIRMED",
 }
 
 // API functions
@@ -136,5 +161,39 @@ export const statisticsApi = {
   getPayments: async (): Promise<PaymentStats> => {
     const response = await axiosClient.get(`${API_URL}/statistics/payments`);
     return response.data;
+  },
+
+  editUserNames: async (
+    userId: string,
+    dto: EditUserNamesDto
+  ): Promise<any> => {
+    const response = await axiosClient.patch(
+      `${API_URL}/users/admin/edit-names/${userId}`,
+      dto
+    );
+    return response.data;
+  },
+
+  changeUserActive: async (userId: string, isActive: boolean): Promise<any> => {
+    const response = await axiosClient.patch(
+      `${API_URL}/users/admin/change-active/${userId}`,
+      { isActive }
+    );
+    return response.data;
+  },
+  changeAppointmentStatus: async (
+    appointmentId: string,
+    status: AppointmentStatus
+  ): Promise<any> => {
+    try {
+      const response = await axiosClient.patch(
+        `/appointments/${appointmentId}/status`,
+        { status }
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error changing appointment status:", error);
+      throw error;
+    }
   },
 };

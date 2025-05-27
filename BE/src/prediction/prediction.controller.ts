@@ -6,6 +6,7 @@ import {
   UploadedFile,
   UseInterceptors,
   Get,
+  Param,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes, ApiTags } from '@nestjs/swagger';
@@ -34,6 +35,11 @@ export class PredictionController {
   @Get('history')
   async getUserPredictionHistory(@CurrentUser() user: any) {
     const userId = user.id ?? user.userId;
+    return this.predictionService.getUserPredictionHistory(userId);
+  }
+
+  @Get('doctor/history/:userId')
+  async doctorGetUserPredictionHistory(@Param('userId') userId: string) {
     return this.predictionService.getUserPredictionHistory(userId);
   }
 }

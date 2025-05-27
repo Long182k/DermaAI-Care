@@ -46,8 +46,26 @@ const DoctorProfile = () => {
   const { userInfo } = useAppStore();
   // Get current date range for schedules
   const today = new Date();
+  today.setHours(0, 0, 0, 0); // Set to beginning of day for accurate comparison
   const startDate = addWeeks(startOfWeek(today), currentWeek);
   const endDate = addDays(startDate, 6);
+
+  const {
+    data: schedules,
+    isLoading: isLoadingSchedules,
+    error: schedulesError,
+  } = useQuery({
+    queryKey: ["doctorSchedules", id, startDate, endDate, filter],
+    queryFn: async () => {
+      const allSchedules = await doctorApi.getDoctorSchedules(id!, startDate, endDate, filter);
+      // Filter out schedules that are in the past
+      return allSchedules.filter(schedule => {
+        const scheduleStartTime = new Date(schedule.startTime);
+        return scheduleStartTime > today;
+      });
+    },
+    enabled: !!id,
+  });
 
   // Function to handle schedule selection and open modal
   const handleScheduleSelect = (schedule: Schedule) => {
@@ -121,17 +139,6 @@ const DoctorProfile = () => {
   } = useQuery({
     queryKey: ["doctor", id],
     queryFn: () => doctorApi.getDoctorById(id!),
-    enabled: !!id,
-  });
-
-  const {
-    data: schedules,
-    isLoading: isLoadingSchedules,
-    error: schedulesError,
-  } = useQuery({
-    queryKey: ["doctorSchedules", id, startDate, endDate, filter],
-    queryFn: () =>
-      doctorApi.getDoctorSchedules(id!, startDate, endDate, filter),
     enabled: !!id,
   });
 
@@ -267,7 +274,7 @@ const DoctorProfile = () => {
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-4 mt-6">
-                  <Button
+                  {/* <Button
                     className="flex-1"
                     onClick={() => {
                       // Use the first available schedule if any exist
@@ -279,10 +286,10 @@ const DoctorProfile = () => {
                     }}
                   >
                     Book Appointment
-                  </Button>
-                  <Button variant="outline" className="flex-1">
+                  </Button> */}
+                  {/* <Button variant="outline" className="flex-1">
                     Send Message
-                  </Button>
+                  </Button> */}
                 </div>
               </div>
             </motion.div>

@@ -48,4 +48,14 @@ export const predictionApi = {
       throw error;
     }
   },
+  
+  getDoctorPatientPredictionHistory: async (patientId: string) => {
+    try {
+      const response = await axiosClient.get(`/prediction/doctor/history/${patientId}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching patient prediction history:", error);
+      throw error;
+    }
+  }
 };

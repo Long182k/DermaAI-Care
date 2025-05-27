@@ -7,11 +7,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/store";
 import { useMutation } from "@tanstack/react-query";
-import {
-  Calendar,
-  Stethoscope,
-  UserCircle
-} from "lucide-react";
+import { Calendar, Stethoscope, UserCircle } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ErrorResponseData } from "@/@util/interface/auth.interface";
@@ -74,6 +70,9 @@ export const Navbar = () => {
     return location.pathname.startsWith(path);
   };
 
+  // Check if user is admin
+  const isAdmin = userInfo?.role === "ADMIN";
+
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b">
       <div className="container flex items-center justify-between h-16">
@@ -82,50 +81,61 @@ export const Navbar = () => {
         </Link>
 
         <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/")}
-            className={isActive("/") ? "bg-primary/10 text-primary font-bold" : ""}
-          >
-            Home
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/about")}
-            className={isActive("/about") ? "bg-primary/10 text-primary font-bold" : ""}
-          >
-            About
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/services")}
-            className={isActive("/services") ? "bg-primary/10 text-primary font-bold" : ""}
-          >
-            Services
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/contact")}
-            className={isActive("/contact") ? "bg-primary/10 text-primary font-bold" : ""}
-          >
-            Contact
-          </Button>
-          {/* Appointments Button */}
-          <Button variant="ghost" onClick={() => navigate("/appointments")}>
-            <Calendar className="h-5 w-5 mr-2" />
-            Appointments
-          </Button>
+          {/* Hide navigation tabs for ADMIN role */}
+          {!isAdmin && (
+            <>
+              <Button
+                variant="ghost"
+                onClick={() => navigate("/")}
+                className={
+                  isActive("/") ? "bg-primary/10 text-primary font-bold" : ""
+                }
+              >
+                Home
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => navigate("/about")}
+                className={
+                  isActive("/about")
+                    ? "bg-primary/10 text-primary font-bold"
+                    : ""
+                }
+              >
+                About
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => navigate("/services")}
+                className={
+                  isActive("/services")
+                    ? "bg-primary/10 text-primary font-bold"
+                    : ""
+                }
+              >
+                Services
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => navigate("/contact")}
+                className={
+                  isActive("/contact")
+                    ? "bg-primary/10 text-primary font-bold"
+                    : ""
+                }
+              >
+                Contact
+              </Button>
 
-          {/* Prediction History Button */}
-          {/* <Button
-            variant="ghost"
-            onClick={() => navigate("/prediction-history")}
-          >
-            <FileImage className="h-5 w-5 mr-2" />
-            Prediction History
-          </Button> */}
+              {/* Appointments Button - also hide for admin */}
+              <Button variant="ghost" onClick={() => navigate("/appointments")}>
+                <Calendar className="h-5 w-5 mr-2" />
+                Appointments
+              </Button>
+            </>
+          )}
 
-          {/* User Menu */}
+          {/* User Menu - always visible */}
           {userInfo && Object.keys(userInfo).length > 0 ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

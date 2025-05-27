@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FileImage, Loader2 } from "lucide-react";
 import { format, isToday, isThisWeek, isThisMonth } from "date-fns";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { predictionApi } from "@/api/detection";
 import { Navbar } from "@/components/Navbar";
 import type { DetectionResponse } from "@/api/detection";
+import { useAppStore } from "@/store";
 
 // Define filter types
 type FilterType = "day" | "week" | "month" | "all";
@@ -32,6 +33,10 @@ interface Prediction {
 const PredictionHistoryPage = () => {
   const [filter, setFilter] = useState<FilterType>("all");
   const navigate = useNavigate();
+  const { patientId } = useParams<{ patientId?: string }>();
+  const { userInfo } = useAppStore();
+  const isDoctor = userInfo?.role === "DOCTOR";
+  const isViewingPatient = isDoctor && patientId;
 
   // Use React Query to fetch prediction history
   const {
@@ -39,8 +44,14 @@ const PredictionHistoryPage = () => {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ["predictionHistory"],
-    queryFn: predictionApi.getUserPredictionHistory,
+    queryKey: ["predictionHistory", patientId],
+    queryFn: () => {
+      if (isViewingPatient) {
+        return predictionApi.getDoctorPatientPredictionHistory(patientId);
+      } else {
+        return predictionApi.getUserPredictionHistory();
+      }
+    },
   });
 
   // Filter predictions based on date
@@ -108,7 +119,9 @@ const PredictionHistoryPage = () => {
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-20">
-        <h1 className="text-3xl font-bold mb-6">My Skin Prediction History</h1>
+        <h1 className="text-3xl font-bold mb-6">
+          {isViewingPatient ? "Patient's Skin Prediction History" : "My Skin Prediction History"}
+        </h1>
         <div className="flex justify-center items-center h-64">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
@@ -119,7 +132,9 @@ const PredictionHistoryPage = () => {
   if (error) {
     return (
       <div className="container mx-auto px-4 py-20">
-        <h1 className="text-3xl font-bold mb-6">My Skin Prediction History</h1>
+        <h1 className="text-3xl font-bold mb-6">
+          {isViewingPatient ? "Patient's Skin Prediction History" : "My Skin Prediction History"}
+        </h1>
         <div className="flex justify-center items-center h-64">
           <p className="text-red-500">
             Failed to load prediction history. Please try again later.
@@ -137,7 +152,7 @@ const PredictionHistoryPage = () => {
           variant="ghost"
           size="icon"
           className="mr-2"
-          onClick={() => navigate("/analysis")}
+          onClick={() => isViewingPatient ? navigate("/appointments") : navigate("/analysis")}
           aria-label="Back"
         >
           <svg
@@ -155,15 +170,19 @@ const PredictionHistoryPage = () => {
             />
           </svg>
         </Button>
-        <h1 className="text-3xl font-bold">My Skin Prediction History</h1>
+        <h1 className="text-3xl font-bold">
+          {isViewingPatient ? "Patient's Skin Prediction History" : "My Skin Prediction History"}
+        </h1>
       </div>
 
       <div className="mb-6 flex justify-between items-center">
         <h2 className="text-xl font-medium"></h2>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/analysis")}>
-            New Analysis
-          </Button>
+          {!isViewingPatient && (
+            <Button variant="outline" onClick={() => navigate("/analysis")}>
+              New Analysis
+            </Button>
+          )}
           {/* Filter dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -194,15 +213,17 @@ const PredictionHistoryPage = () => {
           <Card>
             <CardContent className="py-10 text-center">
               <p className="text-muted-foreground">
-                You have no skin analysis history
+                {isViewingPatient ? "This patient has" : "You have"} no skin analysis history
                 {filter !== "all"
                   ? ` for ${getFilterLabel().toLowerCase()}`
                   : ""}
                 .
               </p>
-              <Button className="mt-4" onClick={() => navigate("/analysis")}>
-                New Skin Analysis
-              </Button>
+              {!isViewingPatient && (
+                <Button className="mt-4" onClick={() => navigate("/analysis")}>
+                  New Skin Analysis
+                </Button>
+              )}
             </CardContent>
           </Card>
         ) : (

@@ -134,6 +134,20 @@ export function ChannelListCustom({
             const extraClasses = isActive
               ? "bg-accent text-white"
               : "cursor-pointer hover:bg-accent";
+            
+            // Find the opposite user in the channel members
+            const getOppositeUser = () => {
+              if (!channel?.state?.members) return null;
+              
+              // Find the member that is not the current user
+              const oppositeUserEntry = Object.entries(channel.state.members).find(
+                ([_, memberData]) => memberData.user?.id !== client.userID
+              );
+              
+              return oppositeUserEntry ? oppositeUserEntry[1].user : null;
+            };
+            
+            const oppositeUser = getOppositeUser();
 
             return (
               <button
@@ -144,7 +158,7 @@ export function ChannelListCustom({
               >
                 <div className="relative">
                   <img
-                    src={channel.data?.image || "/placeholder.svg"}
+                    src={oppositeUser?.image || "/placeholder.svg"}
                     alt="avatar"
                     className="w-12 h-12 rounded-full object-cover"
                   />
@@ -154,7 +168,7 @@ export function ChannelListCustom({
 
                 <div className="flex flex-col items-start">
                   <span className="text-sm font-medium text-black">
-                    {channel.data?.name ?? channel.id}
+                    {oppositeUser?.name || "User"}
                   </span>
                   <span className="text-xs text-gray-500 uppercase">
                     DOCTOR
